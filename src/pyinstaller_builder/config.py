@@ -40,15 +40,9 @@ class DataFile:
 
 
 @dataclass(frozen=True)
-class BuildConfig:
-    """Validated build settings with paths resolved against the project root."""
+class BuildOptions:
+    """Validated PyInstaller-specific options."""
 
-    project_root: Path
-    initialized: bool
-    name: str
-    executable_name: str
-    version: str
-    entry_point: Path
     source_paths: tuple[Path, ...]
     build_type: str
     bundle: str
@@ -56,11 +50,31 @@ class BuildConfig:
     data_files: tuple[DataFile, ...]
     collect_packages: tuple[str, ...]
     hidden_imports: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class BuildMetadata:
+    """Validated application identity and Windows version metadata."""
+
+    name: str
+    version: str
     company_name: str
     author: str
     product_name: str
     file_description: str
     internal_name: str
+
+
+@dataclass(frozen=True)
+class BuildConfig:
+    """Validated build settings with paths resolved against the project root."""
+
+    project_root: Path
+    initialized: bool
+    executable_name: str
+    entry_point: Path
+    options: BuildOptions
+    metadata: BuildMetadata
 
     @classmethod
     def load(cls, project_root: Path) -> BuildConfig:
@@ -121,106 +135,200 @@ class BuildConfig:
         """Validate an already-parsed TOML document (also used by init)."""
         project = _table(document.get("project"), "[project]")
         project_name = _required_string(project, "name", "[project].name")
-
-        tool_value = document.get("tool")
-        if tool_value is None:
-            raise ConfigurationError(f"{CONFIG_PREFIX} table is required")
-        tool = _table(tool_value, "[tool]")
-        if tool.get(CONFIG_TABLE) is None:
-            raise ConfigurationError(f"{CONFIG_PREFIX} table is required")
-        settings = _table(tool.get(CONFIG_TABLE), CONFIG_PREFIX)
-        initialized = settings.get("initialized")
-        if not isinstance(initialized, bool):
-            raise ConfigurationError(
-                f"{CONFIG_PREFIX}.initialized must be a boolean (true or false)"
-            )
-        if not initialized:
-            raise UninitializedConfigurationError(
-                f"This host project is not initialized for {CONFIG_PREFIX}. "
-                "Run 'pyinstaller_builder init' to set it up."
-            )
-
-        version_value = settings.get("version")
-        if version_value is None:
-            version_value = project.get("version")
-            if version_value is None:
-                dynamic = project.get("dynamic", [])
-                if isinstance(dynamic, list) and "version" in dynamic:
-                    reason = "[project].version is dynamic"
-                else:
-                    reason = "[project].version is not set"
-                raise ConfigurationError(
-                    f"{CONFIG_PREFIX}.version is required because {reason}; set an explicit version"
-                )
-            version_key = "[project].version"
-        else:
-            version_key = f"{CONFIG_PREFIX}.version"
-        version = _required_string({version_key: version_value}, version_key, version_key)
-        if not _VERSION_PATTERN.fullmatch(version):
-            raise ConfigurationError(f"{version_key} must be a valid numeric version such as '1.2.3'")
-
-        internal_name = _optional_string(settings, "internal-name", project_name)
-        _validate_name(internal_name, f"{CONFIG_PREFIX}.internal-name")
-        executable_name = _optional_string(settings, "executable-name", "")
-        if executable_name:
-            _validate_name(executable_name, f"{CONFIG_PREFIX}.executable-name")
-        else:
-            executable_name = f"{internal_name}_v{version}_{target_architecture()}"
-
-        entry_point = _existing_path(
-            project_root,
-            settings.get("entry-point"),
-            f"{CONFIG_PREFIX}.entry-point",
-            expected="file",
-        )
-        source_paths = _path_list(
-            project_root, settings.get("source-paths", []), f"{CONFIG_PREFIX}.source-paths"
-        )
-        build_type = _optional_string(settings, "build-type", "release")
-        if build_type not in BUILD_TYPES:
-            raise ConfigurationError(
-                f"{CONFIG_PREFIX}.build-type must be one of {BUILD_TYPES}, got {build_type!r}"
-            )
-        bundle = _optional_string(settings, "bundle", "onefile")
-        if bundle not in BUNDLE_MODES:
-            raise ConfigurationError(
-                f"{CONFIG_PREFIX}.bundle must be one of {BUNDLE_MODES}, got {bundle!r}"
-            )
-
-        icon_value = settings.get("icon")
-        icon = (
-            _existing_path(project_root, icon_value, f"{CONFIG_PREFIX}.icon", expected="file")
-            if icon_value is not None
-            else None
-        )
-        data_files = _data_files(project_root, settings.get("data-files", []))
-        collect_packages = _string_list(
-            settings.get("collect-packages", []), f"{CONFIG_PREFIX}.collect-packages"
-        )
-        hidden_imports = _string_list(
-            settings.get("hidden-imports", []), f"{CONFIG_PREFIX}.hidden-imports"
-        )
-
+        settings = _configuration_settings(document)
+        initialized = _validate_initialized(settings)
+        version = _configuration_version(project, settings)
+        internal_name, executable_name = _application_names(settings, project_name, version)
         return cls(
             project_root=project_root.resolve(),
             initialized=initialized,
-            name=project_name,
             executable_name=executable_name,
-            version=version,
-            entry_point=entry_point,
-            source_paths=tuple(source_paths),
-            build_type=build_type,
-            bundle=bundle,
-            icon=icon,
-            data_files=tuple(data_files),
-            collect_packages=tuple(collect_packages),
-            hidden_imports=tuple(hidden_imports),
-            company_name=_optional_string(settings, "company-name", ""),
-            author=_optional_string(settings, "author", ""),
-            product_name=_optional_string(settings, "product-name", project_name),
-            file_description=_optional_string(settings, "file-description", project_name),
-            internal_name=internal_name,
+            entry_point=_existing_path(
+                project_root,
+                settings.get("entry-point"),
+                f"{CONFIG_PREFIX}.entry-point",
+                expected="file",
+            ),
+            options=_build_options(project_root, settings),
+            metadata=_build_metadata(settings, project_name, version, internal_name),
         )
+
+    @property
+    def name(self) -> str:
+        """Return the host project's package name."""
+        return self.metadata.name
+
+    @property
+    def version(self) -> str:
+        """Return the configured application version."""
+        return self.metadata.version
+
+    @property
+    def source_paths(self) -> tuple[Path, ...]:
+        """Return resolved source directories."""
+        return self.options.source_paths
+
+    @property
+    def build_type(self) -> str:
+        """Return the selected build type."""
+        return self.options.build_type
+
+    @property
+    def bundle(self) -> str:
+        """Return the selected bundle mode."""
+        return self.options.bundle
+
+    @property
+    def icon(self) -> Path | None:
+        """Return the configured icon, if any."""
+        return self.options.icon
+
+    @property
+    def data_files(self) -> tuple[DataFile, ...]:
+        """Return configured bundle data files."""
+        return self.options.data_files
+
+    @property
+    def collect_packages(self) -> tuple[str, ...]:
+        """Return packages selected for full collection."""
+        return self.options.collect_packages
+
+    @property
+    def hidden_imports(self) -> tuple[str, ...]:
+        """Return explicitly configured hidden imports."""
+        return self.options.hidden_imports
+
+    @property
+    def company_name(self) -> str:
+        """Return the configured company name."""
+        return self.metadata.company_name
+
+    @property
+    def author(self) -> str:
+        """Return the configured author."""
+        return self.metadata.author
+
+    @property
+    def product_name(self) -> str:
+        """Return the configured product name."""
+        return self.metadata.product_name
+
+    @property
+    def file_description(self) -> str:
+        """Return the configured file description."""
+        return self.metadata.file_description
+
+    @property
+    def internal_name(self) -> str:
+        """Return the configured internal application name."""
+        return self.metadata.internal_name
+
+
+def _configuration_settings(document: Mapping[str, Any]) -> Mapping[str, Any]:
+    tool = _table(document.get("tool"), "[tool]")
+    settings = tool.get(CONFIG_TABLE)
+    if settings is None:
+        raise ConfigurationError(f"{CONFIG_PREFIX} table is required")
+    return _table(settings, CONFIG_PREFIX)
+
+
+def _validate_initialized(settings: Mapping[str, Any]) -> bool:
+    initialized = settings.get("initialized")
+    if not isinstance(initialized, bool):
+        raise ConfigurationError(
+            f"{CONFIG_PREFIX}.initialized must be a boolean (true or false)"
+        )
+    if not initialized:
+        raise UninitializedConfigurationError(
+            f"This host project is not initialized for {CONFIG_PREFIX}. "
+            "Run 'pyinstaller_builder init' to set it up."
+        )
+    return initialized
+
+
+def _configuration_version(project: Mapping[str, Any], settings: Mapping[str, Any]) -> str:
+    value = settings.get("version")
+    key = f"{CONFIG_PREFIX}.version"
+    if value is None:
+        value = project.get("version")
+        key = "[project].version"
+        if value is None:
+            dynamic = project.get("dynamic", [])
+            reason = "is dynamic" if isinstance(dynamic, list) and "version" in dynamic else "is not set"
+            raise ConfigurationError(
+                f"{CONFIG_PREFIX}.version is required because [project].version {reason}; "
+                "set an explicit version"
+            )
+    version = _required_string({key: value}, key, key)
+    if not _VERSION_PATTERN.fullmatch(version):
+        raise ConfigurationError(f"{key} must be a valid numeric version such as '1.2.3'")
+    return version
+
+
+def _application_names(
+    settings: Mapping[str, Any], project_name: str, version: str
+) -> tuple[str, str]:
+    internal_name = _optional_string(settings, "internal-name", project_name)
+    _validate_name(internal_name, f"{CONFIG_PREFIX}.internal-name")
+    executable_name = _optional_string(settings, "executable-name", "")
+    if executable_name:
+        _validate_name(executable_name, f"{CONFIG_PREFIX}.executable-name")
+    else:
+        executable_name = f"{internal_name}_v{version}_{target_architecture()}"
+    return internal_name, executable_name
+
+
+def _build_options(project_root: Path, settings: Mapping[str, Any]) -> BuildOptions:
+    build_type = _optional_string(settings, "build-type", "release")
+    if build_type not in BUILD_TYPES:
+        raise ConfigurationError(
+            f"{CONFIG_PREFIX}.build-type must be one of {BUILD_TYPES}, got {build_type!r}"
+        )
+    bundle = _optional_string(settings, "bundle", "onefile")
+    if bundle not in BUNDLE_MODES:
+        raise ConfigurationError(
+            f"{CONFIG_PREFIX}.bundle must be one of {BUNDLE_MODES}, got {bundle!r}"
+        )
+    icon_value = settings.get("icon")
+    icon = (
+        _existing_path(project_root, icon_value, f"{CONFIG_PREFIX}.icon", expected="file")
+        if icon_value is not None
+        else None
+    )
+    return BuildOptions(
+        source_paths=tuple(
+            _path_list(project_root, settings.get("source-paths", []), f"{CONFIG_PREFIX}.source-paths")
+        ),
+        build_type=build_type,
+        bundle=bundle,
+        icon=icon,
+        data_files=tuple(_data_files(project_root, settings.get("data-files", []))),
+        collect_packages=tuple(
+            _string_list(
+                settings.get("collect-packages", []), f"{CONFIG_PREFIX}.collect-packages"
+            )
+        ),
+        hidden_imports=tuple(
+            _string_list(settings.get("hidden-imports", []), f"{CONFIG_PREFIX}.hidden-imports")
+        ),
+    )
+
+
+def _build_metadata(
+    settings: Mapping[str, Any],
+    project_name: str,
+    version: str,
+    internal_name: str,
+) -> BuildMetadata:
+    return BuildMetadata(
+        name=project_name,
+        version=version,
+        company_name=_optional_string(settings, "company-name", ""),
+        author=_optional_string(settings, "author", ""),
+        product_name=_optional_string(settings, "product-name", project_name),
+        file_description=_optional_string(settings, "file-description", project_name),
+        internal_name=internal_name,
+    )
 
 
 def load_build_config(project_root: Path) -> BuildConfig:
@@ -271,6 +379,14 @@ def normalize_data_target(value: Any, key: str) -> str:
     return normalized
 
 
+def resolve_project_path(root: Path, value: str) -> Path:
+    """Resolve a configured path against its project root."""
+    path = Path(value)
+    if not path.is_absolute():
+        path = root / path
+    return path.resolve()
+
+
 def _table(value: Any, key: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ConfigurationError(f"{key} must be a TOML table")
@@ -305,10 +421,7 @@ def _validate_name(value: str, key: str) -> None:
 def _existing_path(root: Path, value: Any, key: str, expected: str) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ConfigurationError(f"{key} is required and must be a non-empty path string")
-    path = Path(value.strip())
-    if not path.is_absolute():
-        path = root / path
-    path = path.resolve()
+    path = resolve_project_path(root, value.strip())
     if expected == "file":
         valid = path.is_file()
     elif expected == "directory":

@@ -68,72 +68,117 @@ def main(
     show = output_fn or print
     can_prompt = sys.stdin.isatty() if interactive is None else interactive
     try:
-        project_root = resolve_project_root(args.project_dir)
-        if args.command == "init":
-            if not can_prompt:
-                raise PyInstallerBuilderError(
-                    "init requires an interactive terminal. Run "
-                    "'pyinstaller_builder init --project-dir PATH' from a terminal."
-                )
-            changed = initialize(project_root, input_fn=ask, output_fn=show)
-            if not changed:
-                show("Existing configuration was left unchanged.")
-            return 0
-        if args.command == "clean":
-            result = CleanUtility.clean(project_root, dry_run=args.dry_run)
-            for target in result.removed:
-                show(f"Removed {target}")
-            for target in result.would_remove:
-                show(f"Would remove {target}")
-            for target in result.skipped:
-                show(f"Skipped missing output: {target}")
-            return 0
+        return _run_command(args, ask, show, can_prompt)
+    except (
+        InitializationCancelled,
+        PyInstallerBuilderError,
+        FileNotFoundError,
+        PermissionError,
+        OSError,
+        subprocess.CalledProcessError,
+        KeyboardInterrupt,
+    ) as exc:
+        return _report_command_error(exc)
 
-        try:
-            config = BuildConfig.load(project_root)
-        except ConfigurationError as exc:
-            if not can_prompt:
-                raise ConfigurationError(
-                    f"{exc}\nRun 'pyinstaller_builder init --project-dir {project_root}' "
-                    "in an interactive terminal."
-                ) from exc
-            show(f"pyinstaller_builder configuration needs initialization or repair: {exc}")
-            if _ask_yes_no(ask, show, "Initialize or update it now? [Y/N]: ") is False:
-                show(
-                    f"Build cancelled. You can initialize later with: "
-                    f"pyinstaller_builder init --project-dir {project_root}"
-                )
-                return 2
-            changed = initialize(project_root, input_fn=ask, output_fn=show)
-            if not changed:
-                raise InitializationCancelled(
-                    "Initialization did not make a validated configuration; build cancelled."
-                ) from exc
-            config = BuildConfig.load(project_root)
-        PyInstallerBuilder(config).build()
-        show(f"Build succeeded; output is in {project_root / 'dist'}")
-        return 0
-    except InitializationCancelled as exc:
-        print(str(exc), file=sys.stderr)
-        return 130
-    except PyInstallerBuilderError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+
+def _run_command(
+    args: argparse.Namespace,
+    ask: Callable[[str], str],
+    show: Callable[[str], None],
+    can_prompt: bool,
+) -> int:
+    project_root = resolve_project_root(args.project_dir)
+    if args.command == "init":
+        return _run_init(project_root, ask, show, can_prompt)
+    if args.command == "clean":
+        return _run_clean(project_root, args.dry_run, show)
+    return _run_build(project_root, ask, show, can_prompt)
+
+
+def _run_init(
+    project_root: Path,
+    ask: Callable[[str], str],
+    show: Callable[[str], None],
+    can_prompt: bool,
+) -> int:
+    if not can_prompt:
+        raise PyInstallerBuilderError(
+            "init requires an interactive terminal. Run "
+            "'pyinstaller_builder init --project-dir PATH' from a terminal."
+        )
+    if not initialize(project_root, input_fn=ask, output_fn=show):
+        show("Existing configuration was left unchanged.")
+    return 0
+
+
+def _run_clean(project_root: Path, dry_run: bool, show: Callable[[str], None]) -> int:
+    result = CleanUtility.clean(project_root, dry_run=dry_run)
+    for message in result.messages():
+        show(message)
+    return 0
+
+
+def _run_build(
+    project_root: Path,
+    ask: Callable[[str], str],
+    show: Callable[[str], None],
+    can_prompt: bool,
+) -> int:
+    config = _load_build_config(project_root, ask, show, can_prompt)
+    if config is None:
         return 2
-    except FileNotFoundError as exc:
-        print(f"ERROR: Required file or executable was not found: {exc}", file=sys.stderr)
-        return 1
-    except PermissionError as exc:
-        print(f"ERROR: Permission denied: {exc}", file=sys.stderr)
-        return 1
-    except OSError as exc:
-        print(f"ERROR: Filesystem or process error: {exc}", file=sys.stderr)
-        return 1
-    except subprocess.CalledProcessError as exc:
-        print(f"ERROR: PyInstaller failed with exit code {exc.returncode}", file=sys.stderr)
-        return exc.returncode or 1
-    except KeyboardInterrupt:
-        print("Operation interrupted by user", file=sys.stderr)
-        return 130
+    PyInstallerBuilder(config).build()
+    show(f"Build succeeded; output is in {project_root / 'dist'}")
+    return 0
+
+
+def _load_build_config(
+    project_root: Path,
+    ask: Callable[[str], str],
+    show: Callable[[str], None],
+    can_prompt: bool,
+) -> BuildConfig | None:
+    try:
+        return BuildConfig.load(project_root)
+    except ConfigurationError as exc:
+        if not can_prompt:
+            raise ConfigurationError(
+                f"{exc}\nRun 'pyinstaller_builder init --project-dir {project_root}' "
+                "in an interactive terminal."
+            ) from exc
+        show(f"pyinstaller_builder configuration needs initialization or repair: {exc}")
+        if not _ask_yes_no(ask, show, "Initialize or update it now? [Y/N]: "):
+            show(
+                f"Build cancelled. You can initialize later with: "
+                f"pyinstaller_builder init --project-dir {project_root}"
+            )
+            return None
+        if not initialize(project_root, input_fn=ask, output_fn=show):
+            raise InitializationCancelled(
+                "Initialization did not make a validated configuration; build cancelled."
+            ) from exc
+        return BuildConfig.load(project_root)
+
+
+def _report_command_error(error: BaseException) -> int:
+    message = "Operation interrupted by user"
+    exit_code = 130
+    if isinstance(error, InitializationCancelled):
+        message = str(error)
+    elif isinstance(error, PyInstallerBuilderError):
+        message, exit_code = f"ERROR: {error}", 2
+    elif isinstance(error, FileNotFoundError):
+        message = f"ERROR: Required file or executable was not found: {error}"
+        exit_code = 1
+    elif isinstance(error, PermissionError):
+        message, exit_code = f"ERROR: Permission denied: {error}", 1
+    elif isinstance(error, OSError):
+        message, exit_code = f"ERROR: Filesystem or process error: {error}", 1
+    elif isinstance(error, subprocess.CalledProcessError):
+        message = f"ERROR: PyInstaller failed with exit code {error.returncode}"
+        exit_code = error.returncode or 1
+    print(message, file=sys.stderr)
+    return exit_code
 
 
 def _ask_yes_no(

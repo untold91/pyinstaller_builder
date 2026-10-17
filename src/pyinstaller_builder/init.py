@@ -7,6 +7,7 @@ import os
 import stat
 import tempfile
 from collections.abc import Callable, Mapping, MutableMapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from pyinstaller_builder.config import (
     is_valid_name,
     is_valid_version,
     normalize_data_target,
+    resolve_project_path,
 )
 from pyinstaller_builder.exceptions import (
     ConfigurationError,
@@ -49,6 +51,15 @@ PROMPT_KEYS = (
 )
 
 
+@dataclass(frozen=True)
+class _InitContext:
+    root: Path
+    path: Path
+    document: MutableMapping[str, Any]
+    ask: Callable[[str], str]
+    show: Callable[[str], None]
+
+
 def initialize(
     project_root: Path,
     input_fn: Callable[[str], str] | None = None,
@@ -73,65 +84,87 @@ def initialize(
             f"Invalid TOML in {path}: {exc}. Repair it manually before running init."
         ) from exc
 
+    context = _InitContext(root, path, document, ask, show)
     try:
-        legacy = _table_settings(document, LEGACY_CONFIG_TABLE)
-        existing = _existing_settings(document)
-        if legacy is not None and existing is not None:
-            return _resolve_table_conflict(document, legacy, existing, root, ask, show)
-        if legacy is not None:
-            return _migrate_legacy(document, legacy, path, root, ask, show)
-        if existing is not None:
-            show("Existing [tool.pyinstaller_builder] configuration:")
-            for key, value in existing.items():
-                show(f"  {key} = {value!s}")
-            action = _ask_choice(
-                ask,
-                show,
-                "Choose: [k]eep unchanged, [u]pdate selected settings, [r]eplace: ",
-                ("k", "u", "r"),
-            )
-            if action == "k":
-                settings = dict(existing.items())
-                try:
-                    _validate_preview(document, settings, root)
-                except ConfigurationError:
-                    pass
-                else:
-                    if existing.get("initialized") is True:
-                        return False
-            if action == "u":
-                keys = _ask_update_keys(ask, show)
-                if not keys:
-                    return False
-                settings = dict(existing.items())
-                _prompt_settings(settings, keys, root, document, ask, show)
-            elif action == "r":
-                settings = _new_settings(root, ask, show)
-        else:
-            settings = _new_settings(root, ask, show)
-        _ensure_version(settings, document, ask, show)
-        settings["initialized"] = True
-        _validate_preview(document, settings, root)
-        show("Proposed [tool.pyinstaller_builder] configuration:")
-        for key, value in settings.items():
-            show(f"  {key} = {value!r}")
-        if _ask_choice(ask, show, "Write these settings? [y/N]: ", ("y", "n")) != "y":
-            raise InitializationCancelled("Initialization cancelled; pyproject.toml was not changed.")
-        _write_settings(document, settings)
-        _atomic_write(path, tomlkit.dumps(document))
-        show(f"Added pyinstaller_builder settings to {path}")
-        return True
+        return _initialize_settings(context)
     except (EOFError, KeyboardInterrupt) as exc:
         raise InitializationCancelled(
             "Initialization cancelled; pyproject.toml was not changed."
         ) from exc
 
 
+def _initialize_settings(context: _InitContext) -> bool:
+    legacy = _table_settings(context.document, LEGACY_CONFIG_TABLE)
+    existing = _existing_settings(context.document)
+    if legacy is not None and existing is not None:
+        return _resolve_table_conflict(context, legacy, existing)
+    if legacy is not None:
+        return _migrate_legacy(context, legacy)
+    settings = _choose_settings(context, existing)
+    if settings is None:
+        return False
+    return _confirm_and_write(context, settings)
+
+
+def _choose_settings(
+    context: _InitContext, existing: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    if existing is None:
+        return _new_settings(context)
+    context.show("Existing [tool.pyinstaller_builder] configuration:")
+    for key, value in existing.items():
+        context.show(f"  {key} = {value!s}")
+    action = _ask_choice(
+        context.ask,
+        context.show,
+        "Choose: [k]eep unchanged, [u]pdate selected settings, [r]eplace: ",
+        ("k", "u", "r"),
+    )
+    if action == "k":
+        settings = dict(existing.items())
+        try:
+            _validate_preview(context.document, settings, context.root)
+        except ConfigurationError as exc:
+            context.show(f"Cannot keep invalid configuration: {exc}")
+            action = _ask_choice(
+                context.ask,
+                context.show,
+                "Choose: [u]pdate selected settings or [r]eplace: ",
+                ("u", "r"),
+            )
+        else:
+            return None
+    if action == "u":
+        keys = _ask_update_keys(context.ask, context.show)
+        if not keys:
+            return None
+        settings = dict(existing.items())
+        _prompt_settings(settings, keys, context)
+        return settings
+    return _new_settings(context)
+
+
+def _confirm_and_write(context: _InitContext, settings: dict[str, Any]) -> bool:
+    _ensure_version(settings, context.document, context.ask, context.show)
+    settings["initialized"] = True
+    _validate_preview(context.document, settings, context.root)
+    context.show("Proposed [tool.pyinstaller_builder] configuration:")
+    for key, value in settings.items():
+        context.show(f"  {key} = {value!r}")
+    if _ask_choice(
+        context.ask, context.show, "Write these settings? [y/N]: ", ("y", "n")
+    ) != "y":
+        raise InitializationCancelled("Initialization cancelled; pyproject.toml was not changed.")
+    _write_settings(context.document, settings)
+    _atomic_write(context.path, tomlkit.dumps(context.document))
+    context.show(f"Added pyinstaller_builder settings to {context.path}")
+    return True
+
+
 def _new_settings(
-    root: Path,
-    ask: Callable[[str], str],
-    show: Callable[[str], None],
+    context: _InitContext,
 ) -> dict[str, Any]:
+    root, ask, show = context.root, context.ask, context.show
     settings: dict[str, Any] = {
         "entry-point": _prompt_entry_point(root, ask, show),
         "source-paths": _prompt_source_paths(root, ask, show),
@@ -141,7 +174,7 @@ def _new_settings(
         "hidden-imports": [],
         "data-files": [],
     }
-    icon = _prompt_optional_file("Icon path", _discover_icons(root), root, ask, show)
+    icon = _prompt_optional_file("Icon path", _discover_icons(root), context)
     if icon:
         settings["icon"] = icon
     return settings
@@ -150,55 +183,80 @@ def _new_settings(
 def _prompt_settings(
     settings: dict[str, Any],
     keys: tuple[str, ...],
-    root: Path,
-    document: Mapping[str, Any],
-    ask: Callable[[str], str],
-    show: Callable[[str], None],
+    context: _InitContext,
 ) -> None:
+    handlers: dict[str, Callable[[], Any]] = {
+        "entry-point": lambda: _prompt_entry_point(context.root, context.ask, context.show),
+        "source-paths": lambda: _prompt_source_paths(context.root, context.ask, context.show),
+        "build-type": lambda: _prompt_choice(
+            context.ask,
+            context.show,
+            "Build type",
+            str(settings.get("build-type", "release")),
+            BUILD_TYPES,
+        ),
+        "bundle": lambda: _prompt_choice(
+            context.ask,
+            context.show,
+            "Bundle mode",
+            str(settings.get("bundle", "onefile")),
+            BUNDLE_MODES,
+        ),
+        "icon": lambda: _prompt_icon(settings, context),
+        "data-files": lambda: _prompt_data_files(
+            context.root, context.ask, context.show, settings.get("data-files", [])
+        ),
+        "version": lambda: _prompt_configured_version(settings, context),
+        "executable-name": lambda: _prompt_name(
+            context.ask, context.show, "executable-name", settings.get("executable-name", "")
+        ),
+        "internal-name": lambda: _prompt_name(
+            context.ask, context.show, "internal-name", settings.get("internal-name", "")
+        ),
+        "product-name": lambda: _prompt_nonempty_text(
+            context.ask, context.show, "product-name", settings.get("product-name", "")
+        ),
+        "file-description": lambda: _prompt_nonempty_text(
+            context.ask, context.show, "file-description", settings.get("file-description", "")
+        ),
+        "company-name": lambda: _prompt_optional_text(settings, "company-name", context),
+        "author": lambda: _prompt_optional_text(settings, "author", context),
+    }
+    for key in ("collect-packages", "hidden-imports"):
+        handlers[key] = lambda key=key: _prompt_string_list(
+            context.ask, key, settings.get(key, [])
+        )
     for key in keys:
-        if key == "entry-point":
-            settings[key] = _prompt_entry_point(root, ask, show)
-        elif key == "source-paths":
-            settings[key] = _prompt_source_paths(root, ask, show)
-        elif key == "build-type":
-            settings[key] = _prompt_choice(
-                ask, show, "Build type", str(settings.get(key, "release")), BUILD_TYPES
-            )
-        elif key == "bundle":
-            settings[key] = _prompt_choice(
-                ask, show, "Bundle mode", str(settings.get(key, "onefile")), BUNDLE_MODES
-            )
-        elif key == "icon":
-            found = _discover_icons(root)
-            settings[key] = _prompt_optional_file(
-                "Icon path", found, root, ask, show, str(settings.get(key, ""))
-            )
-            if not settings[key]:
-                settings.pop(key)
-        elif key in ("collect-packages", "hidden-imports"):
-            settings[key] = _prompt_string_list(
-                ask, key, settings.get(key, [])
-            )
-        elif key == "data-files":
-            settings[key] = _prompt_data_files(root, ask, show, settings.get(key, []))
-        elif key == "version":
-            project = document.get("project")
-            project_version = project.get("version") if isinstance(project, Mapping) else ""
-            default = settings.get("version", project_version)
-            settings[key] = _prompt_version(ask, show, default)
-        elif key in ("executable-name", "internal-name"):
-            current = settings.get(key, "")
-            settings[key] = _prompt_name(ask, show, key, current)
-        elif key in ("product-name", "file-description"):
-            current = settings.get(key, "")
-            settings[key] = _prompt_nonempty_text(ask, show, key, current)
-        elif key in ("company-name", "author"):
-            current = settings.get(key, "")
-            answer = ask(f"{key} [{current}]: ").strip()
-            if answer:
-                settings[key] = answer
-            elif key not in settings:
-                settings.pop(key, None)
+        value = handlers[key]()
+        if value is None or (key == "icon" and not value):
+            settings.pop(key, None)
+        else:
+            settings[key] = value
+
+
+def _prompt_icon(settings: Mapping[str, Any], context: _InitContext) -> str:
+    return _prompt_optional_file(
+        "Icon path",
+        _discover_icons(context.root),
+        context,
+        str(settings.get("icon", "")),
+    )
+
+
+def _prompt_configured_version(settings: Mapping[str, Any], context: _InitContext) -> str:
+    project = context.document.get("project")
+    project_version = project.get("version") if isinstance(project, Mapping) else ""
+    return _prompt_version(
+        context.ask, context.show, settings.get("version", project_version)
+    )
+
+
+def _prompt_optional_text(
+    settings: dict[str, Any], key: str, context: _InitContext
+) -> Any:
+    current = settings.get(key, "")
+    answer = context.ask(f"{key} [{current}]: ").strip()
+    return answer or (current if key in settings else None)
 
 
 def _ensure_version(
@@ -264,11 +322,10 @@ def _prompt_source_paths(
 def _prompt_optional_file(
     label: str,
     candidates: list[str],
-    root: Path,
-    ask: Callable[[str], str],
-    show: Callable[[str], None],
+    context: _InitContext,
     current: str = "",
 ) -> str:
+    root, ask, show = context.root, context.ask, context.show
     default = current or (candidates[0] if len(candidates) == 1 else "")
     if len(candidates) > 1:
         show(f"Discovered {label.lower()} candidates: {', '.join(candidates)}")
@@ -400,10 +457,7 @@ def _discover_icons(root: Path) -> list[str]:
 def _valid_path(root: Path, value: str, expected: str) -> bool:
     if not value.strip():
         return False
-    path = Path(value.strip())
-    if not path.is_absolute():
-        path = root / path
-    path = path.resolve()
+    path = resolve_project_path(root, value.strip())
     if expected == "file":
         return path.is_file()
     if expected == "directory":
@@ -457,13 +511,16 @@ def _table_settings(document: Mapping[str, Any], name: str) -> Mapping[str, Any]
 
 
 def _migrate_legacy(
-    document: MutableMapping[str, Any],
+    context: _InitContext,
     legacy: Mapping[str, Any],
-    path: Path,
-    root: Path,
-    ask: Callable[[str], str],
-    show: Callable[[str], None],
 ) -> bool:
+    document, path, root, ask, show = (
+        context.document,
+        context.path,
+        context.root,
+        context.ask,
+        context.show,
+    )
     show("Found legacy [tool.buildtools] settings.")
     if _ask_choice(
         ask,
@@ -498,13 +555,16 @@ def _migrate_legacy(
 
 
 def _resolve_table_conflict(
-    document: MutableMapping[str, Any],
+    context: _InitContext,
     legacy: Mapping[str, Any],
     current: Mapping[str, Any],
-    root: Path,
-    ask: Callable[[str], str],
-    show: Callable[[str], None],
 ) -> bool:
+    document, root, ask, show = (
+        context.document,
+        context.root,
+        context.ask,
+        context.show,
+    )
     show("Both [tool.buildtools] and [tool.pyinstaller_builder] exist.")
     show("Legacy settings:")
     for key, value in legacy.items():
@@ -537,7 +597,7 @@ def _resolve_table_conflict(
         del tool[CONFIG_TABLE]
     else:
         del tool[LEGACY_CONFIG_TABLE]
-    _atomic_write(root / "pyproject.toml", tomlkit.dumps(document))
+    _atomic_write(context.path, tomlkit.dumps(document))
     show("Configuration conflict resolved.")
     return True
 

@@ -116,6 +116,12 @@ class CleanUtility:
     OUTPUTS = ("build", "dist")
 
     @classmethod
+    def output_paths(cls, project_root: Path) -> tuple[Path, ...]:
+        """Return the conventional project-local PyInstaller output paths."""
+        root = project_root.resolve()
+        return tuple(root / name for name in cls.OUTPUTS)
+
+    @classmethod
     def clean(cls, project_root: Path, dry_run: bool = False) -> CleanResult:
         """Remove build/dist, rejecting symlinks and non-directory targets."""
         root = project_root.resolve()
@@ -124,8 +130,7 @@ class CleanUtility:
         removed: list[Path] = []
         would_remove: list[Path] = []
         skipped: list[Path] = []
-        for name in cls.OUTPUTS:
-            target = root / name
+        for target in cls.output_paths(root):
             try:
                 target.lstat()
             except FileNotFoundError:
@@ -153,3 +158,11 @@ class CleanResult:
     removed: tuple[Path, ...]
     would_remove: tuple[Path, ...]
     skipped: tuple[Path, ...]
+
+    def messages(self) -> tuple[str, ...]:
+        """Format cleanup outcomes for display by the command-line interface."""
+        return (
+            *(f"Removed {target}" for target in self.removed),
+            *(f"Would remove {target}" for target in self.would_remove),
+            *(f"Skipped missing output: {target}" for target in self.skipped),
+        )

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import tomlkit
 
+from pyinstaller_builder.config import BuildConfig
 from pyinstaller_builder.exceptions import (
     ConfigurationError,
     InitializationCancelled,
@@ -60,6 +61,25 @@ def test_existing_config_can_be_kept_without_writing(project: Path) -> None:
     )
     assert not changed
     assert path.read_text(encoding="utf-8") == original
+
+
+def test_invalid_config_cannot_be_kept_and_can_be_replaced(project: Path) -> None:
+    """Offer repair instead of failing when invalid settings are kept."""
+    path = project / "pyproject.toml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'entry-point = "src/example app/main.py"',
+            'entry-point = "missing.py"',
+        ),
+        encoding="utf-8",
+    )
+    changed = initialize(
+        project,
+        input_fn=_answering(["k", "r", "", "", "", "", "", "y"]),
+        output_fn=lambda _message: None,
+    )
+    assert changed
+    assert BuildConfig.load(project).entry_point == project / "src" / "example app" / "main.py"
 
 
 def test_existing_config_selective_update_preserves_other_settings(project: Path) -> None:
