@@ -1,3 +1,5 @@
+"""Tests for PyInstaller arguments, metadata, and process execution."""
+
 from __future__ import annotations
 
 import subprocess
@@ -11,6 +13,7 @@ from pyinstaller_builder.pyinstaller_builder import PyInstallerBuilder
 
 
 def test_arguments_include_all_options_and_preserve_spaces(project: Path) -> None:
+    """Include configured options and keep paths containing spaces intact."""
     config = BuildConfig.load(project)
     args = PyInstallerBuilder(config, platform_name="linux").arguments()
     assert "--onefile" in args
@@ -34,6 +37,7 @@ def test_arguments_include_all_options_and_preserve_spaces(project: Path) -> Non
 
 
 def test_debug_onedir_and_windows_version_file_flags(project: Path) -> None:
+    """Select debug and onedir flags and include Windows version metadata."""
     path = project / "pyproject.toml"
     text = path.read_text(encoding="utf-8")
     path.write_text(text.replace('build-type = "release"', 'build-type = "debug"')
@@ -47,6 +51,7 @@ def test_debug_onedir_and_windows_version_file_flags(project: Path) -> None:
 
 
 def test_build_uses_active_interpreter_and_no_shell(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run PyInstaller with the active interpreter without invoking a shell."""
     seen: dict[str, object] = {}
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -62,6 +67,7 @@ def test_build_uses_active_interpreter_and_no_shell(project: Path, monkeypatch: 
 
 
 def test_build_propagates_pyinstaller_failure(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Propagate a non-zero PyInstaller process result to the caller."""
     def run(command: list[str], **kwargs: object) -> None:
         raise subprocess.CalledProcessError(7, command)
 

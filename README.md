@@ -29,21 +29,24 @@ git submodule update --init --recursive
 Replace `<repository-url>` with the actual repository URL. Adjust
 `tools/pyinstaller_builder` if your team uses another submodule path.
 
-### 3. Activate the host project's virtual environment
+### 3. Create or activate the host project's virtual environment
 
-Activate the virtual environment used for the host project before installing
-or running the tool. For example:
+Use the host project's existing virtual environment if it has one. Otherwise,
+create `.venv` once at the host project root, then activate it before
+installing or running the tool:
 
 ```powershell
+if (-not (Test-Path .venv)) { py -m venv .venv }
 .\.venv\Scripts\Activate.ps1
 ```
 
 ```bash
+if [ ! -d .venv ]; then python3 -m venv .venv; fi
 source .venv/bin/activate
 ```
 
-`.venv` is only an example; use the environment directory your project
-actually uses.
+Reuse that environment for subsequent commands; do not recreate it each time.
+If your project uses another environment directory, activate that instead.
 
 ### 4. Install the tool into that environment
 
@@ -225,10 +228,25 @@ The tool repository's `pyproject.toml` packages `pyinstaller_builder`; a host
 project's `pyproject.toml` configures the application build. Python 3.10 or
 newer is the declared minimum. Test/build verification is performed on the
 development environment; the tool targets Windows, macOS, and Linux subject
-to PyInstaller's platform-specific support.
+to PyInstaller's platform-specific support. Reuse an existing project
+environment, or create and activate `.venv` once:
+
+```powershell
+if (-not (Test-Path .venv)) { py -m venv .venv }
+.\.venv\Scripts\Activate.ps1
+```
 
 ```bash
-python -m pip install -e . pytest build
+if [ ! -d .venv ]; then python3 -m venv .venv; fi
+source .venv/bin/activate
+```
+
+Install development tools into that active environment, then reuse it for
+future runs:
+
+```text
+python -m pip install -e . pytest build pylint
 python -m pytest -q
 python -m build
+python -m pylint src tests
 ```

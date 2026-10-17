@@ -1,3 +1,5 @@
+"""Tests for parsing and validating host build configuration."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,6 +21,7 @@ def _write_config(root: Path, body: str) -> None:
 
 
 def test_load_full_config_resolves_paths_and_defaults_version(project: Path) -> None:
+    """Resolve configured paths and inherit the host project's version."""
     config = BuildConfig.load(project)
     assert config.version == "1.2.3"
     assert config.entry_point == project / "src" / "example app" / "main.py"
@@ -30,6 +33,7 @@ def test_load_full_config_resolves_paths_and_defaults_version(project: Path) -> 
 
 
 def test_minimal_settings_use_documented_defaults(project: Path) -> None:
+    """Apply documented defaults when optional build settings are omitted."""
     _write_config(
         project,
         """
@@ -45,7 +49,7 @@ entry-point = "src/example app/main.py"
     assert config.build_type == "release"
     assert config.bundle == "onefile"
     assert config.icon is None
-    assert config.source_paths == ()
+    assert not config.source_paths
 
 
 @pytest.mark.parametrize(
@@ -64,6 +68,7 @@ entry-point = "src/example app/main.py"
     ],
 )
 def test_invalid_settings_report_key(project: Path, settings: str, message: str) -> None:
+    """Identify the invalid or missing setting in configuration errors."""
     if settings:
         _write_config(
             project,
@@ -78,6 +83,7 @@ def test_invalid_settings_report_key(project: Path, settings: str, message: str)
 
 
 def test_dynamic_project_version_requires_explicit_override(project: Path) -> None:
+    """Require an explicit build version when the project version is dynamic."""
     _write_config(
         project,
         """
@@ -98,6 +104,7 @@ entry-point = "src/example app/main.py"
 
 
 def test_invalid_version_and_executable_name_are_rejected(project: Path) -> None:
+    """Reject malformed versions and unsafe executable names."""
     text = (project / "pyproject.toml").read_text(encoding="utf-8")
     _write_config(project, text.replace('version = "1.2.3"', 'version = "None"'))
     with pytest.raises(ConfigurationError, match="valid numeric version"):
@@ -112,6 +119,7 @@ def test_invalid_version_and_executable_name_are_rejected(project: Path) -> None
 
 
 def test_missing_or_false_initialized_flag_requires_setup(project: Path) -> None:
+    """Require explicit initialization before loading build settings."""
     path = project / "pyproject.toml"
     body = path.read_text(encoding="utf-8")
     path.write_text(body.replace("initialized = true\n", ""), encoding="utf-8")
@@ -124,6 +132,7 @@ def test_missing_or_false_initialized_flag_requires_setup(project: Path) -> None
 
 
 def test_initialized_must_be_boolean(project: Path) -> None:
+    """Reject non-boolean values for the initialized flag."""
     path = project / "pyproject.toml"
     path.write_text(
         path.read_text(encoding="utf-8").replace("initialized = true", 'initialized = "yes"'),
@@ -134,6 +143,7 @@ def test_initialized_must_be_boolean(project: Path) -> None:
 
 
 def test_legacy_namespace_requires_explicit_migration(project: Path) -> None:
+    """Require migration before using settings in the legacy namespace."""
     path = project / "pyproject.toml"
     body = path.read_text(encoding="utf-8").replace(
         "[tool.pyinstaller_builder]", "[tool.buildtools]"
@@ -147,6 +157,7 @@ def test_legacy_namespace_requires_explicit_migration(project: Path) -> None:
 
 
 def test_both_configuration_namespaces_report_conflict(project: Path) -> None:
+    """Report a conflict instead of silently choosing between config tables."""
     path = project / "pyproject.toml"
     body = path.read_text(encoding="utf-8")
     path.write_text(
@@ -158,6 +169,7 @@ def test_both_configuration_namespaces_report_conflict(project: Path) -> None:
 
 
 def test_malformed_toml_and_missing_pyproject_are_actionable(tmp_path: Path) -> None:
+    """Explain malformed TOML and missing project files to the caller."""
     (tmp_path / "pyproject.toml").write_text("[project\n", encoding="utf-8")
     with pytest.raises(ProjectFileError, match="Invalid TOML"):
         BuildConfig.load(tmp_path)

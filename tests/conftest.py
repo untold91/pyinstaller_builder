@@ -1,3 +1,5 @@
+"""Shared pytest fixtures for pyinstaller_builder tests."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +9,7 @@ import pytest
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
+    """Create a valid host project with source, data, and build settings."""
     (tmp_path / "src" / "example app").mkdir(parents=True)
     (tmp_path / "src" / "example app" / "main.py").write_text("print('ok')\n", encoding="utf-8")
     (tmp_path / "assets").mkdir()

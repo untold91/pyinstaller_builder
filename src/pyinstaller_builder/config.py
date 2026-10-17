@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sysconfig
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -229,8 +230,6 @@ def load_build_config(project_root: Path) -> BuildConfig:
 
 def target_architecture() -> str:
     """Return the running interpreter's normalized architecture label."""
-    import sysconfig
-
     machine = sysconfig.get_platform().lower().rsplit("-", 1)[-1]
     return {
         "win32": "x86",

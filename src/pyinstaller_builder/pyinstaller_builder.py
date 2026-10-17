@@ -11,7 +11,12 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import yaml
+from pyinstaller_versionfile import create_versionfile_from_input_file
+from pyinstaller_versionfile.exceptions import UsageError, ValidationError
+
 from pyinstaller_builder.config import BuildConfig
+from pyinstaller_builder.exceptions import PyInstallerBuilderError
 
 LOGGER = logging.getLogger("pyinstaller_builder")
 
@@ -68,10 +73,6 @@ class PyInstallerBuilder:
 
     def _generate_version_info(self) -> None:
         """Create the version resource file used by Windows executables."""
-        import yaml
-        from pyinstaller_versionfile import create_versionfile_from_input_file
-        from pyinstaller_versionfile.exceptions import UsageError, ValidationError
-
         config = self.config
         self.metadata_file.parent.mkdir(parents=True, exist_ok=True)
         metadata: dict[str, Any] = {
@@ -97,8 +98,6 @@ class PyInstallerBuilder:
                 input_file=str(self.metadata_file),
             )
         except (UsageError, ValidationError) as exc:
-            from pyinstaller_builder.exceptions import PyInstallerBuilderError
-
             raise PyInstallerBuilderError(
                 f"Could not generate Windows version metadata: {exc}"
             ) from exc

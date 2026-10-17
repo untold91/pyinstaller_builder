@@ -1,3 +1,5 @@
+"""Tests for locating the host project and skipping tool packaging roots."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,6 +29,7 @@ def _write_tool_checkout(root: Path) -> None:
 
 
 def test_discovers_host_root_from_project_root_and_nested_directory(tmp_path: Path) -> None:
+    """Find the nearest host root from its root and a nested directory."""
     host = tmp_path / "host"
     _write_project(host)
     nested = host / "src" / "host_app"
@@ -37,6 +40,7 @@ def test_discovers_host_root_from_project_root_and_nested_directory(tmp_path: Pa
 
 
 def test_skips_submodule_packaging_pyproject_and_finds_host(tmp_path: Path) -> None:
+    """Skip a submodule's own packaging metadata and find its host project."""
     host = tmp_path / "host"
     submodule = host / "tools" / "pyinstaller_builder"
     nested = submodule / "src"
@@ -48,6 +52,7 @@ def test_skips_submodule_packaging_pyproject_and_finds_host(tmp_path: Path) -> N
 
 
 def test_submodule_directory_without_host_requires_explicit_root(tmp_path: Path) -> None:
+    """Require an explicit host root when no parent project exists."""
     submodule = tmp_path / "pyinstaller_builder"
     _write_tool_checkout(submodule)
     with pytest.raises(ProjectFileError, match="pass --project-dir"):
@@ -55,6 +60,7 @@ def test_submodule_directory_without_host_requires_explicit_root(tmp_path: Path)
 
 
 def test_explicit_host_project_root_is_used(tmp_path: Path) -> None:
+    """Use an explicitly selected host even if a nested project is present."""
     host = tmp_path / "host"
     _write_project(host)
     nested = host / "tools" / "pyinstaller_builder"
@@ -64,11 +70,13 @@ def test_explicit_host_project_root_is_used(tmp_path: Path) -> None:
 
 
 def test_host_project_can_use_distribution_name_without_being_skipped(tmp_path: Path) -> None:
+    """Do not mistake a host project name for the tool's packaging project."""
     _write_project(tmp_path, name="pyinstaller_builder")
     assert resolve_project_root(start_dir=tmp_path) == tmp_path
 
 
 def test_tool_checkout_is_not_accepted_as_host_root() -> None:
+    """Reject the tool checkout when explicitly supplied as the host root."""
     repository = Path(__file__).resolve().parents[1]
     with pytest.raises(ProjectFileError, match="not a host project"):
         resolve_project_root(repository)

@@ -1,3 +1,5 @@
+"""Tests for interactive initialization and safe TOML migration."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,6 +21,7 @@ def _answering(values: list[str]):
 
 
 def test_init_preserves_existing_toml_and_adds_configuration(tmp_path: Path) -> None:
+    """Preserve existing TOML content while writing confirmed settings."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "main.py").write_text("print('ok')\n", encoding="utf-8")
     pyproject = tmp_path / "pyproject.toml"
@@ -47,6 +50,7 @@ def test_init_preserves_existing_toml_and_adds_configuration(tmp_path: Path) -> 
 
 
 def test_existing_config_can_be_kept_without_writing(project: Path) -> None:
+    """Leave a valid existing configuration unchanged when requested."""
     path = project / "pyproject.toml"
     original = path.read_text(encoding="utf-8")
     changed = initialize(
@@ -59,6 +63,7 @@ def test_existing_config_can_be_kept_without_writing(project: Path) -> None:
 
 
 def test_existing_config_selective_update_preserves_other_settings(project: Path) -> None:
+    """Update selected settings without changing unrelated configuration."""
     path = project / "pyproject.toml"
     changed = initialize(
         project,
@@ -73,6 +78,7 @@ def test_existing_config_selective_update_preserves_other_settings(project: Path
 
 
 def test_existing_config_replacement_requires_final_confirmation(project: Path) -> None:
+    """Replace existing settings only after final confirmation."""
     path = project / "pyproject.toml"
     changed = initialize(
         project,
@@ -88,6 +94,7 @@ def test_existing_config_replacement_requires_final_confirmation(project: Path) 
 
 
 def test_existing_config_can_update_version_without_touching_other_keys(project: Path) -> None:
+    """Update the configured version while preserving other setting values."""
     path = project / "pyproject.toml"
     changed = initialize(
         project,
@@ -102,6 +109,7 @@ def test_existing_config_can_update_version_without_touching_other_keys(project:
 
 
 def test_legacy_settings_migrate_after_two_confirmations(project: Path) -> None:
+    """Migrate legacy settings only after both migration confirmations."""
     path = project / "pyproject.toml"
     original = path.read_text(encoding="utf-8")
     legacy = original.replace(
@@ -127,6 +135,7 @@ def test_legacy_settings_migrate_after_two_confirmations(project: Path) -> None:
 
 
 def test_declining_legacy_migration_keeps_file_unchanged(project: Path) -> None:
+    """Keep the file unchanged when legacy migration is declined."""
     path = project / "pyproject.toml"
     legacy = path.read_text(encoding="utf-8").replace(
         "[tool.pyinstaller_builder]", "[tool.buildtools]"
@@ -146,6 +155,7 @@ def test_declining_legacy_migration_keeps_file_unchanged(project: Path) -> None:
 
 
 def test_both_config_tables_require_explicit_conflict_resolution(project: Path) -> None:
+    """Require an explicit choice when both configuration tables exist."""
     path = project / "pyproject.toml"
     canonical = path.read_text(encoding="utf-8")
     legacy = canonical.replace(
@@ -185,6 +195,7 @@ bundle = "onedir"
 
 
 def test_cancel_does_not_modify_file(project: Path) -> None:
+    """Preserve the original file when configuration is cancelled."""
     path = project / "pyproject.toml"
     original = path.read_text(encoding="utf-8")
     with pytest.raises(InitializationCancelled):
@@ -193,6 +204,7 @@ def test_cancel_does_not_modify_file(project: Path) -> None:
 
 
 def test_eof_is_friendly_cancellation(project: Path) -> None:
+    """Convert end-of-input during a prompt into a friendly cancellation."""
     def eof(_prompt: str) -> str:
         raise EOFError
 
@@ -201,6 +213,7 @@ def test_eof_is_friendly_cancellation(project: Path) -> None:
 
 
 def test_init_requires_existing_pyproject(tmp_path: Path) -> None:
+    """Require an existing host pyproject file before initialization."""
     with pytest.raises(ConfigurationError, match="Initialize the Python project first"):
         initialize(tmp_path)
 
@@ -208,6 +221,7 @@ def test_init_requires_existing_pyproject(tmp_path: Path) -> None:
 def test_failed_atomic_replace_leaves_original_intact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Preserve the original TOML when the atomic replacement fails."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "main.py").write_text("print('ok')\n", encoding="utf-8")
     path = tmp_path / "pyproject.toml"
