@@ -49,16 +49,6 @@ buildtools-python --help
 The module command is available from Python 3.10+; the console command is
 registered by the editable installation.
 
-For a one-off direct invocation from a source checkout, the compatibility
-launcher is also available:
-
-```bash
-python tools/pyinstaller_builder/build_script.py build --project-dir .
-```
-
-It adds that checkout's `src` directory to the import path and then runs the
-same CLI; it still resolves configuration from the host project directory.
-
 ### 5. Initialize the host project
 
 Run from the host root, or pass its path explicitly:
