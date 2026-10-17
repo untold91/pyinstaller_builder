@@ -31,7 +31,7 @@ def test_build_configuration_error_has_nonzero_exit_without_traceback(
     assert code == 2
     error = capsys.readouterr().err
     assert "not initialized" in error
-    assert "buildtools-python init" in error
+    assert "pyinstaller_builder init" in error
     assert "Traceback" not in error
 
 
@@ -97,8 +97,8 @@ def test_cli_discovers_host_root_from_working_directory(
         cwd = host / "tools" / "pyinstaller_builder"
         cwd.mkdir(parents=True)
         (cwd / "pyproject.toml").write_text(
-            '[project]\nname = "buildtools-python"\nversion = "1.0.0"\n\n'
-            '[project.scripts]\nbuildtools-python = "pyinstaller_builder.cli:main"\n',
+            '[project]\nname = "pyinstaller_builder"\nversion = "1.0.0"\n\n'
+            '[project.scripts]\npyinstaller_builder = "pyinstaller_builder.cli:main"\n',
             encoding="utf-8",
         )
         (cwd / "src" / "pyinstaller_builder").mkdir(parents=True)
@@ -161,7 +161,7 @@ def test_declining_auto_initialization_does_not_write_or_build(
         interactive=True,
     ) == 2
     assert pyproject.read_text(encoding="utf-8") == original
-    assert "buildtools-python init" in capsys.readouterr().out
+    assert "pyinstaller_builder init" in capsys.readouterr().out
 
 
 def test_eof_during_auto_init_prompt_cancels_without_writing(
@@ -196,7 +196,7 @@ def test_noninteractive_build_does_not_prompt(
     assert main(["build", "--project-dir", str(tmp_path)], interactive=False) == 2
     error = capsys.readouterr().err
     assert "not initialized" in error
-    assert "buildtools-python init" in error
+    assert "pyinstaller_builder init" in error
 
 
 def test_malformed_host_toml_does_not_trigger_auto_init(
@@ -232,7 +232,7 @@ def test_initialized_but_invalid_build_config_offers_repair(
 name = "host-app"
 version = "1.0.0"
 
-[tool.buildtools]
+[tool.pyinstaller_builder]
 initialized = true
 entry-point = "missing.py"
 """.lstrip(),

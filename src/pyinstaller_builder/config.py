@@ -1,4 +1,4 @@
-"""Parsing and validation for the [tool.buildtools] configuration."""
+"""Parsing and validation for [tool.pyinstaller_builder] configuration."""
 
 from __future__ import annotations
 
@@ -12,11 +12,16 @@ import tomlkit
 from tomlkit.exceptions import ParseError
 
 from pyinstaller_builder.exceptions import (
+    ConfigurationConflictError,
     ConfigurationError,
+    LegacyConfigurationError,
     ProjectFileError,
     UninitializedConfigurationError,
 )
 
+CONFIG_TABLE = "pyinstaller_builder"
+LEGACY_CONFIG_TABLE = "buildtools"
+CONFIG_PREFIX = f"[tool.{CONFIG_TABLE}]"
 BUILD_TYPES = ("release", "debug")
 BUNDLE_MODES = ("onefile", "onedir")
 _VERSION_PATTERN = re.compile(
@@ -74,26 +79,39 @@ class BuildConfig:
                 f"Invalid TOML in {pyproject}: {exc}. Repair it manually before running init."
             ) from exc
         tool = document.get("tool")
-        settings = tool.get("buildtools") if isinstance(tool, Mapping) else None
+        legacy_settings = (
+            tool.get(LEGACY_CONFIG_TABLE) if isinstance(tool, Mapping) else None
+        )
+        settings = tool.get(CONFIG_TABLE) if isinstance(tool, Mapping) else None
+        if isinstance(legacy_settings, Mapping) and isinstance(settings, Mapping):
+            raise ConfigurationConflictError(
+                "Both [tool.buildtools] and [tool.pyinstaller_builder] exist. "
+                "Run 'pyinstaller_builder init' and explicitly resolve the conflict."
+            )
+        if isinstance(legacy_settings, Mapping) and settings is None:
+            raise LegacyConfigurationError(
+                "Found legacy [tool.buildtools] configuration. "
+                "Run 'pyinstaller_builder init' to review and migrate it."
+            )
         if not isinstance(settings, Mapping):
             raise UninitializedConfigurationError(
-                "This host project is not initialized for BuildTools; it has no "
-                "[tool.buildtools] configuration. Run 'buildtools-python init' to set it up."
+                f"This host project is not initialized for {CONFIG_PREFIX}; "
+                f"run 'pyinstaller_builder init' to set it up."
             )
         if "initialized" not in settings:
             raise UninitializedConfigurationError(
-                "This host project is not initialized for BuildTools. "
-                "Run 'buildtools-python init' to set it up."
+                f"This host project is not initialized for {CONFIG_PREFIX}. "
+                "Run 'pyinstaller_builder init' to set it up."
             )
         initialized = settings["initialized"]
         if initialized is False:
             raise UninitializedConfigurationError(
-                "This host project is not initialized for BuildTools. "
-                "Run 'buildtools-python init' to set it up."
+                f"This host project is not initialized for {CONFIG_PREFIX}. "
+                "Run 'pyinstaller_builder init' to set it up."
             )
         if not isinstance(initialized, bool):
             raise ConfigurationError(
-                "[tool.buildtools].initialized must be a boolean (true or false)"
+                f"{CONFIG_PREFIX}.initialized must be a boolean (true or false)"
             )
         return cls.from_document(document, root)
 
@@ -105,20 +123,20 @@ class BuildConfig:
 
         tool_value = document.get("tool")
         if tool_value is None:
-            raise ConfigurationError("[tool.buildtools] table is required")
+            raise ConfigurationError(f"{CONFIG_PREFIX} table is required")
         tool = _table(tool_value, "[tool]")
-        if tool.get("buildtools") is None:
-            raise ConfigurationError("[tool.buildtools] table is required")
-        settings = _table(tool.get("buildtools"), "[tool.buildtools]")
+        if tool.get(CONFIG_TABLE) is None:
+            raise ConfigurationError(f"{CONFIG_PREFIX} table is required")
+        settings = _table(tool.get(CONFIG_TABLE), CONFIG_PREFIX)
         initialized = settings.get("initialized")
         if not isinstance(initialized, bool):
             raise ConfigurationError(
-                "[tool.buildtools].initialized must be a boolean (true or false)"
+                f"{CONFIG_PREFIX}.initialized must be a boolean (true or false)"
             )
         if not initialized:
             raise UninitializedConfigurationError(
-                "This host project is not initialized for BuildTools. "
-                "Run 'buildtools-python init' to set it up."
+                f"This host project is not initialized for {CONFIG_PREFIX}. "
+                "Run 'pyinstaller_builder init' to set it up."
             )
 
         version_value = settings.get("version")
@@ -131,55 +149,55 @@ class BuildConfig:
                 else:
                     reason = "[project].version is not set"
                 raise ConfigurationError(
-                    f"[tool.buildtools].version is required because {reason}; set an explicit version"
+                    f"{CONFIG_PREFIX}.version is required because {reason}; set an explicit version"
                 )
             version_key = "[project].version"
         else:
-            version_key = "[tool.buildtools].version"
+            version_key = f"{CONFIG_PREFIX}.version"
         version = _required_string({version_key: version_value}, version_key, version_key)
         if not _VERSION_PATTERN.fullmatch(version):
             raise ConfigurationError(f"{version_key} must be a valid numeric version such as '1.2.3'")
 
         internal_name = _optional_string(settings, "internal-name", project_name)
-        _validate_name(internal_name, "[tool.buildtools].internal-name")
+        _validate_name(internal_name, f"{CONFIG_PREFIX}.internal-name")
         executable_name = _optional_string(settings, "executable-name", "")
         if executable_name:
-            _validate_name(executable_name, "[tool.buildtools].executable-name")
+            _validate_name(executable_name, f"{CONFIG_PREFIX}.executable-name")
         else:
             executable_name = f"{internal_name}_v{version}_{target_architecture()}"
 
         entry_point = _existing_path(
             project_root,
             settings.get("entry-point"),
-            "[tool.buildtools].entry-point",
+            f"{CONFIG_PREFIX}.entry-point",
             expected="file",
         )
         source_paths = _path_list(
-            project_root, settings.get("source-paths", []), "[tool.buildtools].source-paths"
+            project_root, settings.get("source-paths", []), f"{CONFIG_PREFIX}.source-paths"
         )
         build_type = _optional_string(settings, "build-type", "release")
         if build_type not in BUILD_TYPES:
             raise ConfigurationError(
-                f"[tool.buildtools].build-type must be one of {BUILD_TYPES}, got {build_type!r}"
+                f"{CONFIG_PREFIX}.build-type must be one of {BUILD_TYPES}, got {build_type!r}"
             )
         bundle = _optional_string(settings, "bundle", "onefile")
         if bundle not in BUNDLE_MODES:
             raise ConfigurationError(
-                f"[tool.buildtools].bundle must be one of {BUNDLE_MODES}, got {bundle!r}"
+                f"{CONFIG_PREFIX}.bundle must be one of {BUNDLE_MODES}, got {bundle!r}"
             )
 
         icon_value = settings.get("icon")
         icon = (
-            _existing_path(project_root, icon_value, "[tool.buildtools].icon", expected="file")
+            _existing_path(project_root, icon_value, f"{CONFIG_PREFIX}.icon", expected="file")
             if icon_value is not None
             else None
         )
         data_files = _data_files(project_root, settings.get("data-files", []))
         collect_packages = _string_list(
-            settings.get("collect-packages", []), "[tool.buildtools].collect-packages"
+            settings.get("collect-packages", []), f"{CONFIG_PREFIX}.collect-packages"
         )
         hidden_imports = _string_list(
-            settings.get("hidden-imports", []), "[tool.buildtools].hidden-imports"
+            settings.get("hidden-imports", []), f"{CONFIG_PREFIX}.hidden-imports"
         )
 
         return cls(
@@ -270,10 +288,10 @@ def _required_string(table: Mapping[str, Any], key: str, display_key: str) -> st
 def _optional_string(table: Mapping[str, Any], key: str, default: str) -> str:
     value = table.get(key, default)
     if not isinstance(value, str):
-        raise ConfigurationError(f"[tool.buildtools].{key} must be a string")
+        raise ConfigurationError(f"{CONFIG_PREFIX}.{key} must be a string")
     value = value.strip()
     if key in {"product-name", "file-description"} and not value:
-        raise ConfigurationError(f"[tool.buildtools].{key} must be a non-empty string")
+        raise ConfigurationError(f"{CONFIG_PREFIX}.{key} must be a non-empty string")
     return value
 
 
@@ -322,7 +340,7 @@ def _string_list(value: Any, key: str) -> list[str]:
 
 
 def _data_files(root: Path, value: Any) -> list[DataFile]:
-    key = "[tool.buildtools].data-files"
+    key = f"{CONFIG_PREFIX}.data-files"
     if not isinstance(value, list):
         raise ConfigurationError(f"{key} must be an array of tables")
     result: list[DataFile] = []

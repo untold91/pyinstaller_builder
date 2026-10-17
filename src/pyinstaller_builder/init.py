@@ -1,4 +1,4 @@
-"""Interactive, formatting-preserving initialization of BuildTools settings."""
+"""Interactive, formatting-preserving initialization of pyinstaller_builder settings."""
 
 from __future__ import annotations
 
@@ -17,15 +17,17 @@ from pyinstaller_builder.config import (
     BUILD_TYPES,
     BUNDLE_MODES,
     BuildConfig,
+    CONFIG_TABLE,
+    LEGACY_CONFIG_TABLE,
     is_valid_name,
     is_valid_version,
     normalize_data_target,
 )
 from pyinstaller_builder.exceptions import (
-    BuildToolsError,
     ConfigurationError,
     InitializationCancelled,
     ProjectFileError,
+    PyInstallerBuilderError,
 )
 
 PROMPT_KEYS = (
@@ -52,7 +54,7 @@ def initialize(
     input_fn: Callable[[str], str] | None = None,
     output_fn: Callable[[str], None] | None = None,
 ) -> bool:
-    """Interactively add or update [tool.buildtools]; return False when kept."""
+    """Interactively add or update [tool.pyinstaller_builder]."""
     ask = input_fn or input
     show = output_fn or print
     root = project_root.resolve()
@@ -60,7 +62,7 @@ def initialize(
     if not path.is_file():
         raise ConfigurationError(
             f"No pyproject.toml found in {root}. Initialize the Python project first, "
-            "then run 'buildtools-python init'."
+            "then run 'pyinstaller_builder init'."
         )
     try:
         document = tomlkit.parse(path.read_text(encoding="utf-8"))
@@ -72,9 +74,14 @@ def initialize(
         ) from exc
 
     try:
+        legacy = _table_settings(document, LEGACY_CONFIG_TABLE)
         existing = _existing_settings(document)
+        if legacy is not None and existing is not None:
+            return _resolve_table_conflict(document, legacy, existing, root, ask, show)
+        if legacy is not None:
+            return _migrate_legacy(document, legacy, path, root, ask, show)
         if existing is not None:
-            show("Existing [tool.buildtools] configuration:")
+            show("Existing [tool.pyinstaller_builder] configuration:")
             for key, value in existing.items():
                 show(f"  {key} = {value!s}")
             action = _ask_choice(
@@ -105,14 +112,14 @@ def initialize(
         _ensure_version(settings, document, ask, show)
         settings["initialized"] = True
         _validate_preview(document, settings, root)
-        show("Proposed [tool.buildtools] configuration:")
+        show("Proposed [tool.pyinstaller_builder] configuration:")
         for key, value in settings.items():
             show(f"  {key} = {value!r}")
         if _ask_choice(ask, show, "Write these settings? [y/N]: ", ("y", "n")) != "y":
             raise InitializationCancelled("Initialization cancelled; pyproject.toml was not changed.")
         _write_settings(document, settings)
         _atomic_write(path, tomlkit.dumps(document))
-        show(f"Added BuildTools settings to {path}")
+        show(f"Added pyinstaller_builder settings to {path}")
         return True
     except (EOFError, KeyboardInterrupt) as exc:
         raise InitializationCancelled(
@@ -207,9 +214,9 @@ def _ensure_version(
         isinstance(project_version, str) and project_version.strip()
     ):
         return
-    show("[project].version is absent or dynamic; an explicit BuildTools version is needed.")
+    show("[project].version is absent or dynamic; an explicit pyinstaller_builder version is needed.")
     while True:
-        value = ask("[tool.buildtools].version: ").strip()
+        value = ask("[tool.pyinstaller_builder].version: ").strip()
         if is_valid_version(value):
             settings["version"] = value
             return
@@ -337,7 +344,7 @@ def _prompt_version(
     if not isinstance(default, str):
         default = ""
     while True:
-        value = ask(f"[tool.buildtools].version [{default}]: ").strip() or default
+        value = ask(f"[tool.pyinstaller_builder].version [{default}]: ").strip() or default
         if is_valid_version(value):
             return value
         show("Enter a numeric version such as 1.2.3.")
@@ -432,17 +439,126 @@ def _ask_choice(
 
 
 def _existing_settings(document: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    return _table_settings(document, CONFIG_TABLE)
+
+
+def _table_settings(document: Mapping[str, Any], name: str) -> Mapping[str, Any] | None:
     tool = document.get("tool")
     if tool is None:
         return None
     if not isinstance(tool, Mapping):
         raise ConfigurationError("[tool] must be a TOML table")
-    settings = tool.get("buildtools")
+    settings = tool.get(name)
     if settings is None:
         return None
     if not isinstance(settings, Mapping):
-        raise ConfigurationError("[tool.buildtools] must be a TOML table")
+        raise ConfigurationError(f"[tool.{name}] must be a TOML table")
     return settings
+
+
+def _migrate_legacy(
+    document: MutableMapping[str, Any],
+    legacy: Mapping[str, Any],
+    path: Path,
+    root: Path,
+    ask: Callable[[str], str],
+    show: Callable[[str], None],
+) -> bool:
+    show("Found legacy [tool.buildtools] settings.")
+    if _ask_choice(
+        ask,
+        show,
+        "Migrate all settings and data-files to [tool.pyinstaller_builder]? [y/N]: ",
+        ("y", "n"),
+    ) != "y":
+        show(
+            "No changes made. To migrate manually, copy [tool.buildtools] to "
+            "[tool.pyinstaller_builder] in pyproject.toml, then remove the old table."
+        )
+        return False
+    settings = dict(legacy.items())
+    if "initialized" in settings and not isinstance(settings["initialized"], bool):
+        raise ConfigurationError(
+            "[tool.buildtools].initialized must be a boolean before migration"
+        )
+    settings["initialized"] = True
+    _validate_preview_with_legacy(document, settings, root)
+    show("Migration summary:")
+    for key, value in settings.items():
+        show(f"  {key} = {value!s}")
+    if _ask_choice(ask, show, "Save this migration? [y/N]: ", ("y", "n")) != "y":
+        show("No changes made. The legacy table remains unchanged.")
+        return False
+    _write_settings(document, settings)
+    tool = document["tool"]
+    del tool[LEGACY_CONFIG_TABLE]
+    _atomic_write(path, tomlkit.dumps(document))
+    show("Migrated settings to [tool.pyinstaller_builder].")
+    return True
+
+
+def _resolve_table_conflict(
+    document: MutableMapping[str, Any],
+    legacy: Mapping[str, Any],
+    current: Mapping[str, Any],
+    root: Path,
+    ask: Callable[[str], str],
+    show: Callable[[str], None],
+) -> bool:
+    show("Both [tool.buildtools] and [tool.pyinstaller_builder] exist.")
+    show("Legacy settings:")
+    for key, value in legacy.items():
+        show(f"  {key} = {value!s}")
+    show("Canonical settings:")
+    for key, value in current.items():
+        show(f"  {key} = {value!s}")
+    action = _ask_choice(
+        ask,
+        show,
+        "Choose [l]egacy settings, keep [n]ew settings, or [c]ancel: ",
+        ("l", "n", "c"),
+    )
+    if action == "c":
+        show("No changes made; both tables are preserved.")
+        return False
+    selected = dict(legacy.items() if action == "l" else current.items())
+    selected["initialized"] = True
+    _validate_preview_with_legacy(document, selected, root, selected_table=action)
+    show(f"Selected {'legacy' if action == 'l' else 'canonical'} settings:")
+    for key, value in selected.items():
+        show(f"  {key} = {value!s}")
+    if _ask_choice(ask, show, "Save this resolution and remove the other table? [y/N]: ",
+                   ("y", "n")) != "y":
+        show("No changes made; both tables are preserved.")
+        return False
+    _write_settings(document, selected)
+    tool = document["tool"]
+    if action == "l":
+        del tool[CONFIG_TABLE]
+    else:
+        del tool[LEGACY_CONFIG_TABLE]
+    _atomic_write(root / "pyproject.toml", tomlkit.dumps(document))
+    show("Configuration conflict resolved.")
+    return True
+
+
+def _validate_preview_with_legacy(
+    document: Mapping[str, Any],
+    settings: dict[str, Any],
+    root: Path,
+    *,
+    selected_table: str = "l",
+) -> None:
+    preview = copy.deepcopy(document)
+    tool = preview.get("tool")
+    if not isinstance(tool, MutableMapping):
+        raise ConfigurationError("[tool] must be a TOML table")
+    if selected_table == "l":
+        del tool[LEGACY_CONFIG_TABLE]
+    else:
+        del tool[CONFIG_TABLE]
+    _write_settings(preview, settings)
+    BuildConfig.from_document(preview, root)
 
 
 def _validate_preview(
@@ -460,19 +576,19 @@ def _write_settings(document: MutableMapping[str, Any], settings: Mapping[str, A
         document["tool"] = tool
     if not isinstance(tool, MutableMapping):
         raise ConfigurationError("[tool] must be a TOML table")
-    buildtools = tool.get("buildtools")
-    if buildtools is None:
-        buildtools = tomlkit.table()
-        tool["buildtools"] = buildtools
-    if not isinstance(buildtools, MutableMapping):
-        raise ConfigurationError("[tool.buildtools] must be a TOML table")
+    config_table = tool.get(CONFIG_TABLE)
+    if config_table is None:
+        config_table = tomlkit.table()
+        tool[CONFIG_TABLE] = config_table
+    if not isinstance(config_table, MutableMapping):
+        raise ConfigurationError("[tool] must be a TOML table")
     for key, value in settings.items():
         if key == "data-files":
             if not isinstance(value, list) or any(
                 not isinstance(entry, Mapping) for entry in value
             ):
                 raise ConfigurationError(
-                    "[tool.buildtools].data-files must be an array of tables"
+                    "[tool.pyinstaller_builder].data-files must be an array of tables"
                 )
             array = tomlkit.aot()
             for entry in value:
@@ -480,10 +596,10 @@ def _write_settings(document: MutableMapping[str, Any], settings: Mapping[str, A
                 for entry_key, entry_value in entry.items():
                     table[entry_key] = entry_value
                 array.append(table)
-            buildtools[key] = array
+            config_table[key] = array
         else:
-            buildtools[key] = value
-    buildtools["initialized"] = True
+            config_table[key] = value
+    config_table["initialized"] = True
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -506,7 +622,7 @@ def _atomic_write(path: Path, content: str) -> None:
         os.chmod(temporary_path, mode)
         os.replace(temporary_path, path)
     except OSError as exc:
-        raise BuildToolsError(f"Could not safely update {path}: {exc}") from exc
+        raise PyInstallerBuilderError(f"Could not safely update {path}: {exc}") from exc
     finally:
         if temporary_path is not None:
             try:

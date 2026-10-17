@@ -6,7 +6,9 @@ import pytest
 
 from pyinstaller_builder.config import BuildConfig
 from pyinstaller_builder.exceptions import (
+    ConfigurationConflictError,
     ConfigurationError,
+    LegacyConfigurationError,
     ProjectFileError,
     UninitializedConfigurationError,
 )
@@ -34,7 +36,7 @@ def test_minimal_settings_use_documented_defaults(project: Path) -> None:
 [project]
 name = "minimal-app"
 version = "0.2.0"
-[tool.buildtools]
+[tool.pyinstaller_builder]
 initialized = true
 entry-point = "src/example app/main.py"
 """.lstrip(),
@@ -49,14 +51,14 @@ entry-point = "src/example app/main.py"
 @pytest.mark.parametrize(
     ("settings", "message"),
     [
-        ("", "no \\[tool\\.buildtools\\] configuration"),
+        ("", "not initialized"),
         ("entry-point = 12", "entry-point is required"),
         ('entry-point = "missing.py"', "existing file"),
         ('entry-point = "src/example app/main.py"\nbuild-type = "fast"', "build-type must be"),
         ('entry-point = "src/example app/main.py"\nbundle = "zip"', "bundle must be"),
         ('entry-point = "src/example app/main.py"\nhidden-imports = [""]', "non-empty strings"),
         (
-            'entry-point = "src/example app/main.py"\n[[tool.buildtools.data-files]]\nsource = "assets"\ntarget = "../outside"',
+            'entry-point = "src/example app/main.py"\n[[tool.pyinstaller_builder.data-files]]\nsource = "assets"\ntarget = "../outside"',
             "stay inside",
         ),
     ],
@@ -65,7 +67,7 @@ def test_invalid_settings_report_key(project: Path, settings: str, message: str)
     if settings:
         _write_config(
             project,
-            '[project]\nname = "app"\nversion = "1.0.0"\n[tool.buildtools]\ninitialized = true\n'
+            '[project]\nname = "app"\nversion = "1.0.0"\n[tool.pyinstaller_builder]\ninitialized = true\n'
             + settings,
         )
     else:
@@ -82,7 +84,7 @@ def test_dynamic_project_version_requires_explicit_override(project: Path) -> No
 [project]
 name = "dynamic-app"
 dynamic = ["version"]
-[tool.buildtools]
+[tool.pyinstaller_builder]
 initialized = true
 entry-point = "src/example app/main.py"
 """.lstrip(),
@@ -128,6 +130,30 @@ def test_initialized_must_be_boolean(project: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(ConfigurationError, match="initialized must be a boolean"):
+        BuildConfig.load(project)
+
+
+def test_legacy_namespace_requires_explicit_migration(project: Path) -> None:
+    path = project / "pyproject.toml"
+    body = path.read_text(encoding="utf-8").replace(
+        "[tool.pyinstaller_builder]", "[tool.buildtools]"
+    ).replace(
+        "[[tool.pyinstaller_builder.data-files]]",
+        "[[tool.buildtools.data-files]]",
+    )
+    path.write_text(body, encoding="utf-8")
+    with pytest.raises(LegacyConfigurationError, match="pyinstaller_builder init"):
+        BuildConfig.load(project)
+
+
+def test_both_configuration_namespaces_report_conflict(project: Path) -> None:
+    path = project / "pyproject.toml"
+    body = path.read_text(encoding="utf-8")
+    path.write_text(
+        body + '\n[tool.buildtools]\ninitialized = true\nentry-point = "src/example app/main.py"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationConflictError, match="resolve the conflict"):
         BuildConfig.load(project)
 
 

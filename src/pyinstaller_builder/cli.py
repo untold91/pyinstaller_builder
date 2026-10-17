@@ -1,4 +1,4 @@
-"""Command-line interface for buildtools-python."""
+"""Command-line interface for pyinstaller_builder."""
 
 from __future__ import annotations
 
@@ -8,12 +8,11 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from pyinstaller_builder.config import BuildConfig
+from pyinstaller_builder.config import BuildConfig, CONFIG_PREFIX
 from pyinstaller_builder.exceptions import (
-    BuildToolsError,
     ConfigurationError,
     InitializationCancelled,
-    ProjectFileError,
+    PyInstallerBuilderError,
 )
 from pyinstaller_builder.init import initialize
 from pyinstaller_builder.project import resolve_project_root
@@ -23,22 +22,22 @@ from pyinstaller_builder.pyinstaller_builder import CleanUtility, PyInstallerBui
 def create_parser() -> argparse.ArgumentParser:
     """Create the command-line parser with host-project discovery guidance."""
     parser = argparse.ArgumentParser(
-        prog="buildtools-python",
+        prog="pyinstaller_builder",
         description=(
             "Configure and run PyInstaller builds for a host application. "
             "Settings are stored in the host project's pyproject.toml under "
-            "[tool.buildtools]; they are separate from this tool's packaging TOML."
+            f"{CONFIG_PREFIX}; they are separate from this tool's packaging TOML."
         ),
         epilog=(
             "By default, discovery starts in the current directory and selects the "
             "nearest host pyproject.toml, skipping this tool's own checkout. Use "
             "--project-dir PATH to select the host root explicitly. Build requires "
-            "[tool.buildtools].initialized = true."
+            f"{CONFIG_PREFIX}.initialized = true."
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
     for command, description in (
-        ("init", "Initialize or update BuildTools settings in the host project"),
+        ("init", "Initialize or update pyinstaller_builder settings in the host project"),
         ("build", "Build the configured host application"),
         ("clean", "Remove generated build and dist folders"),
     ):
@@ -72,9 +71,9 @@ def main(
         project_root = resolve_project_root(args.project_dir)
         if args.command == "init":
             if not can_prompt:
-                raise BuildToolsError(
+                raise PyInstallerBuilderError(
                     "init requires an interactive terminal. Run "
-                    "'buildtools-python init --project-dir PATH' from a terminal."
+                    "'pyinstaller_builder init --project-dir PATH' from a terminal."
                 )
             changed = initialize(project_root, input_fn=ask, output_fn=show)
             if not changed:
@@ -92,26 +91,24 @@ def main(
 
         try:
             config = BuildConfig.load(project_root)
-        except ProjectFileError:
-            raise
         except ConfigurationError as exc:
             if not can_prompt:
                 raise ConfigurationError(
-                    f"{exc}\nRun 'buildtools-python init --project-dir {project_root}' "
+                    f"{exc}\nRun 'pyinstaller_builder init --project-dir {project_root}' "
                     "in an interactive terminal."
                 ) from exc
-            show(f"BuildTools configuration needs initialization or repair: {exc}")
+            show(f"pyinstaller_builder configuration needs initialization or repair: {exc}")
             if _ask_yes_no(ask, show, "Initialize or update it now? [Y/N]: ") is False:
                 show(
                     f"Build cancelled. You can initialize later with: "
-                    f"buildtools-python init --project-dir {project_root}"
+                    f"pyinstaller_builder init --project-dir {project_root}"
                 )
                 return 2
             changed = initialize(project_root, input_fn=ask, output_fn=show)
             if not changed:
                 raise InitializationCancelled(
                     "Initialization did not make a validated configuration; build cancelled."
-                )
+                ) from exc
             config = BuildConfig.load(project_root)
         PyInstallerBuilder(config).build()
         show(f"Build succeeded; output is in {project_root / 'dist'}")
@@ -119,7 +116,7 @@ def main(
     except InitializationCancelled as exc:
         print(str(exc), file=sys.stderr)
         return 130
-    except BuildToolsError as exc:
+    except PyInstallerBuilderError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except FileNotFoundError as exc:

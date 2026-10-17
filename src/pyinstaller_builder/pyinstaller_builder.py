@@ -97,9 +97,11 @@ class PyInstallerBuilder:
                 input_file=str(self.metadata_file),
             )
         except (UsageError, ValidationError) as exc:
-            from pyinstaller_builder.exceptions import BuildToolsError
+            from pyinstaller_builder.exceptions import PyInstallerBuilderError
 
-            raise BuildToolsError(f"Could not generate Windows version metadata: {exc}") from exc
+            raise PyInstallerBuilderError(
+                f"Could not generate Windows version metadata: {exc}"
+            ) from exc
 
 
 def _copyright(company_name: str, author: str) -> str:

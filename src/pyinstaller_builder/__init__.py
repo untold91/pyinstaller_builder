@@ -1,12 +1,12 @@
 """Build PyInstaller applications from host-project TOML configuration."""
 
 from pyinstaller_builder.config import BuildConfig, DataFile, load_build_config
-from pyinstaller_builder.exceptions import BuildToolsError, ConfigurationError
+from pyinstaller_builder.exceptions import ConfigurationError, PyInstallerBuilderError
 
 __all__ = [
     "BuildConfig",
-    "BuildToolsError",
     "ConfigurationError",
+    "PyInstallerBuilderError",
     "DataFile",
     "load_build_config",
 ]

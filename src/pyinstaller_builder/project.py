@@ -11,7 +11,7 @@ from tomlkit.exceptions import ParseError
 
 from pyinstaller_builder.exceptions import ProjectFileError
 
-_DISTRIBUTION_NAME = "buildtools-python"
+_DISTRIBUTION_NAME = "pyinstaller_builder"
 _PACKAGE_DIRECTORY = Path(__file__).resolve().parent
 _SOURCE_REPOSITORY_ROOT = (
     _PACKAGE_DIRECTORY.parent.parent
@@ -37,7 +37,7 @@ def resolve_project_root(
             raise ProjectFileError(f"Project directory does not exist: {root}")
         if _is_tool_repository(root):
             raise ProjectFileError(
-                f"{root} is the buildtools-python tool repository, not a host project. "
+                f"{root} is the pyinstaller_builder tool repository, not a host project. "
                 "Pass --project-dir with the host application's root."
             )
         if not (root / "pyproject.toml").is_file():
@@ -79,6 +79,6 @@ def _is_tool_distribution_pyproject(path: Path) -> bool:
     scripts = project.get("scripts")
     return (
         isinstance(scripts, Mapping)
-        and scripts.get("buildtools-python") == "pyinstaller_builder.cli:main"
+        and scripts.get("pyinstaller_builder") == "pyinstaller_builder.cli:main"
         and (path.parent / "src" / "pyinstaller_builder").is_dir()
     )

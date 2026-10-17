@@ -26,7 +26,7 @@ requires-python = ">=3.10"
 [tool.custom]
 preserved = true
 
-[tool.buildtools]
+[tool.pyinstaller_builder]
 initialized = true
 entry-point = "src/example app/main.py"
 source-paths = ["src"]
@@ -36,7 +36,7 @@ icon = "app.ico"
 collect-packages = ["example_plugin"]
 hidden-imports = ["example_plugin.backend"]
 
-[[tool.buildtools.data-files]]
+[[tool.pyinstaller_builder.data-files]]
 source = "assets"
 target = "assets"
 """.lstrip(),

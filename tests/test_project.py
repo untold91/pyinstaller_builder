@@ -17,11 +17,11 @@ def _write_project(root: Path, name: str = "host-app") -> None:
 
 
 def _write_tool_checkout(root: Path) -> None:
-    _write_project(root, name="buildtools-python")
+    _write_project(root, name="pyinstaller_builder")
     path = root / "pyproject.toml"
     with path.open("a", encoding="utf-8") as stream:
         stream.write(
-            '\n[project.scripts]\nbuildtools-python = "pyinstaller_builder.cli:main"\n'
+            '\n[project.scripts]\npyinstaller_builder = "pyinstaller_builder.cli:main"\n'
         )
     (root / "src" / "pyinstaller_builder").mkdir(parents=True)
 
@@ -58,13 +58,13 @@ def test_explicit_host_project_root_is_used(tmp_path: Path) -> None:
     host = tmp_path / "host"
     _write_project(host)
     nested = host / "tools" / "pyinstaller_builder"
-    _write_project(nested, name="buildtools-python")
+    _write_project(nested, name="pyinstaller_builder")
 
     assert resolve_project_root(host / ".") == host
 
 
 def test_host_project_can_use_distribution_name_without_being_skipped(tmp_path: Path) -> None:
-    _write_project(tmp_path, name="buildtools-python")
+    _write_project(tmp_path, name="pyinstaller_builder")
     assert resolve_project_root(start_dir=tmp_path) == tmp_path
 
 

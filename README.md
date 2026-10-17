@@ -1,200 +1,234 @@
-# buildtools-python
+# pyinstaller_builder
 
-`buildtools-python` configures and runs PyInstaller for an existing Python host
-application. It does not create or replace the host application's project
-metadata, install the host application's dependencies, or replace PyInstaller.
+`pyinstaller_builder` configures and runs PyInstaller for an existing Python
+host application. It does not create the host project's metadata, manage its
+application dependencies, replace PyInstaller, or cross-compile binaries.
 
-The tool distribution is named `buildtools-python`, its Python import module
-is `pyinstaller_builder`, and its console command is `buildtools-python`.
-These names are intentionally distinct from the host project's `[project].name`.
+The package import, distribution identity, and console command are all named
+`pyinstaller_builder`. Package indexes may normalize underscores and hyphens
+in distribution names; the Python import and command remain
+`pyinstaller_builder`.
 
-## Add BuildTools to an existing project as a Git submodule
+## Add `pyinstaller_builder` to an existing project as a Git submodule
 
-### 1. Open the existing host project root
+### 1. Open the existing host project
 
-The host application must already have its own `pyproject.toml`. BuildTools
-settings are added to that file under `[tool.buildtools]`; do not edit the
-submodule's `pyproject.toml`, which is only used to package the tool.
+Start from the host application's root. The host must already have a
+`pyproject.toml`. That file contains the host's
+`[tool.pyinstaller_builder]` settings. The submodule has its own
+`pyproject.toml` for packaging the tool; do not configure the host build in
+that file.
 
-### 2. Add the submodule
+### 2. Add the Git submodule
 
 ```bash
 git submodule add <repository-url> tools/pyinstaller_builder
 git submodule update --init --recursive
 ```
 
-Replace `<repository-url>` with the tool repository URL. Adjust
-`tools/pyinstaller_builder` if your team uses a different submodule path.
+Replace `<repository-url>` with the actual repository URL. Adjust
+`tools/pyinstaller_builder` if your team uses another submodule path.
 
-### 3. Install into the host project's active environment
+### 3. Activate the host project's virtual environment
 
-Activate the host project's virtual environment first, then install the tool
-from its submodule:
+Activate the virtual environment used for the host project before installing
+or running the tool. For example:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+```bash
+source .venv/bin/activate
+```
+
+`.venv` is only an example; use the environment directory your project
+actually uses.
+
+### 4. Install the tool into that environment
 
 ```bash
 python -m pip install -e ./tools/pyinstaller_builder
 ```
 
-This installs the tool and its declared runtime dependencies (including
-PyInstaller 6.x) into the selected environment. Use the same interpreter for
-subsequent commands.
+This installs the reusable tool and its dependencies into the active
+environment. It does not alter the host application's name, version,
+dependencies, or build backend.
 
-### 4. Confirm installation and help
+### 5. Confirm installation and help
+
+```bash
+pyinstaller_builder --help
+pyinstaller_builder init --help
+pyinstaller_builder build --help
+pyinstaller_builder clean --help
+```
+
+Module invocation is also supported:
 
 ```bash
 python -m pyinstaller_builder --help
-buildtools-python --help
+python -m pyinstaller_builder init
+python -m pyinstaller_builder build
+python -m pyinstaller_builder clean
 ```
 
-The module command is available from Python 3.10+; the console command is
-registered by the editable installation.
+The distribution is installed as `pyinstaller_builder`; its import module and
+console command use the same spelling.
 
-### 5. Initialize the host project
+### 6. Initialize the host project
 
-Run from the host root, or pass its path explicitly:
+From the host project root:
 
 ```bash
-buildtools-python init --project-dir .
+pyinstaller_builder init --project-dir .
 ```
 
-The interactive initializer discovers likely entry points, source directories,
-icons, and the project version, then asks you to confirm a summary before it
-writes anything. It preserves other TOML metadata and comments. If BuildTools
-settings already exist, it offers keep, selective update, or replacement.
-After successful validation and save, it writes
-`[tool.buildtools].initialized = true`. Cancelling or declining leaves the
-file unchanged.
+The initializer discovers likely entry points, source directories, icons, and
+the host `[project].version`. It validates settings, previews the proposed
+configuration, and asks for confirmation before writing. Existing canonical
+settings can be kept, selectively updated, or replaced. Once required settings
+validate and save successfully, it writes `initialized = true`.
 
-### 6. Review `[tool.buildtools]`
+If you run `build` before initialization in an interactive terminal, the tool
+asks whether to initialize or repair the settings. Answer **Y** to enter the
+same confirmed setup flow; a successful save resumes that build once. Answer
+**N** to cancel without modifying the file or building. Cancellation and
+failures also stop the build. Non-interactive use never waits for input; run
+`init` before building in CI.
 
-Here is a complete example. Paths are resolved relative to the host root:
+### 7. Review the host TOML
+
+This is a complete example using the canonical namespace:
 
 ```toml
-[tool.buildtools]
+[tool.pyinstaller_builder]
 initialized = true
-entry-point = "src/espress_view/__main__.py"
+entry-point = "src/my_application/__main__.py"
 source-paths = ["src"]
 build-type = "release"
 bundle = "onefile"
-icon = "assets/icons/app.ico"
-collect-packages = ["esptool"]
-hidden-imports = ["esptool.__main__"]
+icon = "assets/app.ico"
+collect-packages = []
+hidden-imports = []
 
-[[tool.buildtools.data-files]]
+[[tool.pyinstaller_builder.data-files]]
 source = "assets"
 target = "assets"
 ```
 
-`initialized` must be the boolean `true`, not a string. `entry-point` is
-required and must name an existing file. `source-paths` defaults to `[]` and
-must contain existing directories. `build-type` defaults to `"release"` and
-accepts `"release"` or `"debug"`; `bundle` defaults to `"onefile"` and accepts
-`"onefile"` or `"onedir"`. `icon` is optional but must exist if set.
-`collect-packages` and `hidden-imports` are optional arrays of non-empty
-strings. Each repeated `data-files` table requires an existing `source` file or
-directory and accepts an optional relative `target` (default `"."`).
+`initialized` must be a TOML boolean. `entry-point` is required and must be
+an existing file. `source-paths` defaults to `[]` and must contain existing
+directories. `build-type` defaults to `"release"` and accepts `"release"` or
+`"debug"`; `bundle` defaults to `"onefile"` and accepts `"onefile"` or
+`"onedir"`. `icon` is optional but must exist when configured.
+`collect-packages` and `hidden-imports` default to empty arrays. Each
+`data-files` table requires an existing file or directory as `source`; its
+relative bundle `target` defaults to `"."`.
 
-The build version defaults to the host's `[project].version`. Set
-`[tool.buildtools].version` only to deliberately override it. If project
-version is missing or dynamic, set an explicit BuildTools version during init.
-Optional metadata keys are `executable-name`, `internal-name`, `company-name`,
+The build version defaults to the host's `[project].version`. Use the optional
+`version` setting only for an intentional override. If the host version is
+absent or dynamic, set an explicit version during initialization. Optional
+metadata fields are `executable-name`, `internal-name`, `company-name`,
 `author`, `product-name`, and `file-description`. The default executable name
 is `<internal-name>_v<version>_<interpreter-architecture>`.
 
-### 7. Build the application
+### 8. Build the application
 
 ```bash
-buildtools-python build --project-dir .
+pyinstaller_builder build --project-dir .
 ```
 
-Relative paths resolve from the host root, regardless of the tool installation
-location. The command runs `sys.executable -m PyInstaller` with argument
-arrays, preserving spaces in paths. Build output, work files, and generated
-specification files are placed in the host project's `dist/` and `build/`
-directories. Windows builds additionally generate version resources under
-`build/`; those metadata options are Windows-specific. PyInstaller targets the
-active interpreter's platform and architecture and does not cross-compile.
+All configured relative paths are resolved from the host project root. The
+tool invokes `sys.executable -m PyInstaller` with a list of arguments, so
+spaces in paths are preserved. PyInstaller writes distribution output to
+`dist/`; build work files and generated specification files are stored in
+`build/`. On Windows, version metadata is generated under `build/` and passed
+to PyInstaller. PyInstaller builds for the active interpreter's platform and
+architecture. Windows, macOS, and Linux are supported subject to PyInstaller's
+platform support and compatible bootloader.
 
-PyInstaller 6.x accepts `--add-data` values in `SOURCE:DEST` form on the
-supported platforms; the tool uses that documented syntax.
+The tool targets PyInstaller 6.x. Its `--add-data` argument uses the documented
+`SOURCE:DEST` syntax.
 
-### 8. Clean generated artifacts
+### 9. Clean generated artifacts
 
 ```bash
-buildtools-python clean --project-dir .
-buildtools-python clean --project-dir . --dry-run
+pyinstaller_builder clean --project-dir .
+pyinstaller_builder clean --project-dir . --dry-run
 ```
 
-Cleanup is independent of `initialized` and build-input validity. It only
-targets the conventional host-root `build/` and `dist/` directories, refuses
-symlinks and non-directory targets, skips missing directories, and reports
-removed/skipped targets. `--dry-run` lists exact candidates without deleting.
+Cleanup is available even when build settings are absent or invalid. It only
+considers the host-root `build/` and `dist/` directories, refuses symlinks and
+non-directory paths, skips missing outputs, and reports removed or skipped
+targets. It will not accept arbitrary cleanup paths. `--dry-run` lists the
+exact directories that would be removed.
 
-### 9. Automatic initialization before build
+### 10. Migrate older configuration
 
-If `build` finds a missing, false, or invalid BuildTools configuration in an
-interactive terminal, it explains the problem and asks whether to initialize
-or update it. On **Y**, it enters the same confirmed setup flow as `init` and
-continues the original build exactly once after a successful save. On **N**, it
-does not write or build and prints the `buildtools-python init` command to run
-later. Cancellation, validation errors, or write failures stop the build. In
-non-interactive/CI use, it never prompts; run `init` in advance and ensure
-`initialized = true`.
+Earlier releases used `[tool.buildtools]`. That namespace is supported only
+for explicit, one-time migration; the active parser and initializer use
+`[tool.pyinstaller_builder]`.
 
-Malformed TOML is never overwritten automatically. Repair the syntax
-manually, review the project file, then run `init` again.
+When only the old table exists, `init` offers to copy its settings—including
+repeated data-file entries—to the canonical table. It previews and validates
+the result, then requires confirmation before removing the old table. Declining
+leaves the file unchanged. If both tables exist, the tool shows both and
+requires you to explicitly choose which table to keep or cancel; it never
+merges or silently prefers conflicting values.
 
-### 10. Clone on another machine
+### 11. Clone the parent repository on another machine
 
-Clone the host repository and its submodules together:
+Clone the host project and its submodules:
 
 ```bash
 git clone --recurse-submodules <parent-repository-url>
 ```
 
-For a repository already cloned without submodules:
+For an existing clone without submodules:
 
 ```bash
 git submodule update --init --recursive
 ```
 
-Then activate the host project's virtual environment and install the
-submodule package using step 3's command.
+Activate the host project's virtual environment, install the submodule with
+step 4, then verify the command with `pyinstaller_builder --help`.
 
-### 11. Troubleshooting
+### 12. Troubleshooting
 
-- **Submodule directory is empty:** run `git submodule update --init --recursive`.
-- **Command/module not found:** activate the intended virtual environment and
-  install `./tools/pyinstaller_builder` with that interpreter's
-  `python -m pip`.
-- **Wrong project root:** run from a directory under the host project or pass
-  `--project-dir PATH`. Discovery walks upward from the current directory,
-  chooses the nearest host `pyproject.toml`, and skips this tool's own
-  packaging TOML. It does not search unrelated sibling directories.
-- **No host TOML found from the submodule:** run the command from the host
-  project or pass its root explicitly.
-- **Malformed TOML:** repair the host `pyproject.toml` manually before running
-  `init`; the tool will not replace malformed input.
-- **Invalid entry point or icon:** ensure the configured file exists relative
-  to the host root. Source paths must be existing directories.
-- **Configuration not initialized:** run `buildtools-python init` and confirm
-  the summary; the host TOML must contain `initialized = true`.
-- **PyInstaller build failure:** verify the active environment contains
-  PyInstaller 6.x and that hidden imports, package collection, data paths,
-  and platform-specific assets are valid.
+- **Submodule is missing or empty:** run `git submodule update --init --recursive`.
+- **Import or command is unavailable:** activate the intended environment and
+  run `python -m pip install -e ./tools/pyinstaller_builder` with that
+  environment's Python.
+- **Wrong host root:** run from the host root or pass `--project-dir PATH`.
+  Discovery starts at the current directory, walks upward, and skips the
+  tool's own packaging project; it does not search unrelated siblings.
+- **Tool TOML appears to be used:** pass the host directory explicitly with
+  `--project-dir`; the tool's packaging TOML is not host configuration.
+- **Legacy `[tool.buildtools]` found:** run `pyinstaller_builder init` and
+  review the explicit migration before confirming.
+- **Both configuration tables exist:** choose which table to retain in the
+  conflict-resolution prompt or cancel and resolve the TOML manually.
+- **Malformed TOML:** repair the host `pyproject.toml` manually before
+  running `init`; malformed files are not overwritten.
+- **Entry point or icon is invalid:** configure an existing file relative to
+  the host root. Source paths must be existing directories.
+- **Project is not initialized:** run `pyinstaller_builder init` and confirm
+  the validated settings.
+- **PyInstaller is missing or the build fails:** confirm the active
+  environment has the declared PyInstaller 6.x dependency, then inspect
+  PyInstaller's diagnostics and configured imports, data files, and assets.
 
 ## Tool development
 
-The tool repository's own `pyproject.toml` contains packaging metadata for the
-`buildtools-python` distribution. It is not the host application's config.
-Python 3.10 or newer and PyInstaller 6.x are the declared compatibility
-targets; supported operating systems are Windows, macOS, and Linux, subject
-to PyInstaller's platform-specific support and bootloaders.
-
-From the tool repository:
+The tool repository's `pyproject.toml` packages `pyinstaller_builder`; a host
+project's `pyproject.toml` configures the application build. Python 3.10 or
+newer is the declared minimum. Test/build verification is performed on the
+development environment; the tool targets Windows, macOS, and Linux subject
+to PyInstaller's platform-specific support.
 
 ```bash
-python -m pip install -e . pytest
+python -m pip install -e . pytest build
 python -m pytest -q
 python -m build
 ```
