@@ -12,6 +12,7 @@ from pyinstaller_builder.config import BuildConfig, CONFIG_PREFIX
 from pyinstaller_builder.exceptions import (
     ConfigurationError,
     InitializationCancelled,
+    ProjectFileError,
     PyInstallerBuilderError,
 )
 from pyinstaller_builder.init import initialize
@@ -87,11 +88,13 @@ def _run_command(
     show: Callable[[str], None],
     can_prompt: bool,
 ) -> int:
-    project_root = resolve_project_root(args.project_dir)
     if args.command == "init":
+        project_root = resolve_project_root(args.project_dir, require_pyproject=False)
         return _run_init(project_root, ask, show, can_prompt)
     if args.command == "clean":
+        project_root = resolve_project_root(args.project_dir)
         return _run_clean(project_root, args.dry_run, show)
+    project_root = resolve_project_root(args.project_dir)
     return _run_build(project_root, ask, show, can_prompt)
 
 
@@ -140,7 +143,28 @@ def _load_build_config(
 ) -> BuildConfig | None:
     try:
         return BuildConfig.load(project_root)
-    except ConfigurationError as exc:
+    except ProjectFileError as exc:
+        if "Invalid TOML" in str(exc) or "Could not read" in str(exc):
+            print(str(exc), file=sys.stderr)
+            return None
+        if not can_prompt:
+            raise ConfigurationError(
+                f"{exc}\nRun 'pyinstaller_builder init --project-dir {project_root}' "
+                "in an interactive terminal."
+            ) from exc
+        show(f"pyinstaller_builder configuration needs initialization or repair: {exc}")
+        if not _ask_yes_no(ask, show, "Initialize or update it now? [Y/N]: "):
+            show(
+                f"Build cancelled. You can initialize later with: "
+                f"pyinstaller_builder init --project-dir {project_root}"
+            )
+            return None
+        if not initialize(project_root, input_fn=ask, output_fn=show):
+            raise InitializationCancelled(
+                "Initialization did not make a validated configuration; build cancelled."
+            ) from exc
+        return BuildConfig.load(project_root)
+    except (ConfigurationError, FileNotFoundError, PermissionError, OSError) as exc:
         if not can_prompt:
             raise ConfigurationError(
                 f"{exc}\nRun 'pyinstaller_builder init --project-dir {project_root}' "

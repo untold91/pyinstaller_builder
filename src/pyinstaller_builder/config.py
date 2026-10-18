@@ -133,11 +133,12 @@ class BuildConfig:
     @classmethod
     def from_document(cls, document: Mapping[str, Any], project_root: Path) -> BuildConfig:
         """Validate an already-parsed TOML document (also used by init)."""
-        project = _table(document.get("project"), "[project]")
-        project_name = _required_string(project, "name", "[project].name")
+        project = document.get("project") if isinstance(document.get("project"), Mapping) else {}
+        project_name = _project_name(project, project_root)
         settings = _configuration_settings(document)
         initialized = _validate_initialized(settings)
         version = _configuration_version(project, settings)
+        project_description = _project_description(project)
         internal_name, executable_name = _application_names(settings, project_name, version)
         return cls(
             project_root=project_root.resolve(),
@@ -150,7 +151,13 @@ class BuildConfig:
                 expected="file",
             ),
             options=_build_options(project_root, settings),
-            metadata=_build_metadata(settings, project_name, version, internal_name),
+            metadata=_build_metadata(
+                settings,
+                project_name,
+                version,
+                internal_name,
+                project_description,
+            ),
         )
 
     @property
@@ -247,18 +254,14 @@ def _validate_initialized(settings: Mapping[str, Any]) -> bool:
 
 
 def _configuration_version(project: Mapping[str, Any], settings: Mapping[str, Any]) -> str:
-    value = settings.get("version")
-    key = f"{CONFIG_PREFIX}.version"
+    value = project.get("version") if isinstance(project, Mapping) else None
+    key = "[project].version"
     if value is None:
-        value = project.get("version")
+        value = settings.get("version")
+        key = f"{CONFIG_PREFIX}.version"
+    if value is None:
+        value = "0.1.0"
         key = "[project].version"
-        if value is None:
-            dynamic = project.get("dynamic", [])
-            reason = "is dynamic" if isinstance(dynamic, list) and "version" in dynamic else "is not set"
-            raise ConfigurationError(
-                f"{CONFIG_PREFIX}.version is required because [project].version {reason}; "
-                "set an explicit version"
-            )
     version = _required_string({key: value}, key, key)
     if not _VERSION_PATTERN.fullmatch(version):
         raise ConfigurationError(f"{key} must be a valid numeric version such as '1.2.3'")
@@ -268,7 +271,7 @@ def _configuration_version(project: Mapping[str, Any], settings: Mapping[str, An
 def _application_names(
     settings: Mapping[str, Any], project_name: str, version: str
 ) -> tuple[str, str]:
-    internal_name = _optional_string(settings, "internal-name", project_name)
+    internal_name = project_name if project_name else _optional_string(settings, "internal-name", project_name)
     _validate_name(internal_name, f"{CONFIG_PREFIX}.internal-name")
     executable_name = _optional_string(settings, "executable-name", "")
     if executable_name:
@@ -279,7 +282,7 @@ def _application_names(
 
 
 def _build_options(project_root: Path, settings: Mapping[str, Any]) -> BuildOptions:
-    build_type = _optional_string(settings, "build-type", "release")
+    build_type = _optional_string(settings, "build-type", "debug")
     if build_type not in BUILD_TYPES:
         raise ConfigurationError(
             f"{CONFIG_PREFIX}.build-type must be one of {BUILD_TYPES}, got {build_type!r}"
@@ -319,16 +322,43 @@ def _build_metadata(
     project_name: str,
     version: str,
     internal_name: str,
+    project_description: str,
 ) -> BuildMetadata:
+    file_description = project_description or _optional_string(
+        settings,
+        "file-description",
+        project_name,
+    )
+    resolved_internal_name = internal_name or project_name
     return BuildMetadata(
         name=project_name,
         version=version,
         company_name=_optional_string(settings, "company-name", ""),
         author=_optional_string(settings, "author", ""),
         product_name=_optional_string(settings, "product-name", project_name),
-        file_description=_optional_string(settings, "file-description", project_name),
-        internal_name=internal_name,
+        file_description=file_description,
+        internal_name=(
+            resolved_internal_name
+            if resolved_internal_name
+            else _optional_string(settings, "internal-name", project_name)
+        ),
     )
+
+
+def _project_name(project: Mapping[str, Any], root: Path) -> str:
+    """Return the stable project name from TOML metadata or the directory name."""
+    value = project.get("name") if isinstance(project, Mapping) else None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return root.name or "host-app"
+
+
+def _project_description(project: Mapping[str, Any]) -> str:
+    """Return project.description or an empty string when the metadata is absent."""
+    value = project.get("description") if isinstance(project, Mapping) else None
+    if isinstance(value, str):
+        return value
+    return ""
 
 
 def load_build_config(project_root: Path) -> BuildConfig:

@@ -25,6 +25,7 @@ def resolve_project_root(
     project_dir: Path | None = None,
     *,
     start_dir: Path | None = None,
+    require_pyproject: bool = True,
 ) -> Path:
     """Resolve the explicit host root or nearest host project above start_dir.
 
@@ -40,15 +41,13 @@ def resolve_project_root(
                 f"{root} is the pyinstaller_builder tool repository, not a host project. "
                 "Pass --project-dir with the host application's root."
             )
-        if not (root / "pyproject.toml").is_file():
-            raise ProjectFileError(
-                f"No pyproject.toml found in {root}; pass --project-dir with the host project root."
-            )
         return root
 
     current = (start_dir or Path.cwd()).expanduser().resolve()
     if not current.is_dir():
         current = current.parent
+    if not require_pyproject:
+        return current
     for candidate in (current, *current.parents):
         pyproject = candidate / "pyproject.toml"
         if not pyproject.is_file():

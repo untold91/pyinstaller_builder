@@ -41,13 +41,10 @@ PROMPT_KEYS = (
     "collect-packages",
     "hidden-imports",
     "data-files",
-    "version",
     "executable-name",
-    "internal-name",
     "company-name",
     "author",
     "product-name",
-    "file-description",
 )
 
 
@@ -70,19 +67,23 @@ def initialize(
     show = output_fn or print
     root = project_root.resolve()
     path = root / "pyproject.toml"
-    if not path.is_file():
-        raise ConfigurationError(
-            f"No pyproject.toml found in {root}. Initialize the Python project first, "
-            "then run 'pyinstaller_builder init'."
-        )
-    try:
-        document = tomlkit.parse(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise ProjectFileError(f"Could not read {path}: {exc}") from exc
-    except ParseError as exc:
-        raise ProjectFileError(
-            f"Invalid TOML in {path}: {exc}. Repair it manually before running init."
-        ) from exc
+    if not path.exists():
+        document = tomlkit.document()
+        project = tomlkit.table()
+        project["name"] = root.name or "host-app"
+        project["version"] = "0.1.0"
+        project["description"] = ""
+        document["project"] = project
+        show(f"No pyproject.toml found in {root}; creating a minimal project file before setup.")
+    else:
+        try:
+            document = tomlkit.parse(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise ProjectFileError(f"Could not read {path}: {exc}") from exc
+        except ParseError as exc:
+            raise ProjectFileError(
+                f"Invalid TOML in {path}: {exc}. Repair it manually before running init."
+            ) from exc
 
     context = _InitContext(root, path, document, ask, show)
     try:
@@ -145,7 +146,7 @@ def _choose_settings(
 
 
 def _confirm_and_write(context: _InitContext, settings: dict[str, Any]) -> bool:
-    _ensure_version(settings, context.document, context.ask, context.show)
+    _ensure_version(settings, context.document, context.show)
     settings["initialized"] = True
     _validate_preview(context.document, settings, context.root)
     context.show("Proposed [tool.pyinstaller_builder] configuration:")
@@ -165,14 +166,19 @@ def _new_settings(
     context: _InitContext,
 ) -> dict[str, Any]:
     root, ask, show = context.root, context.ask, context.show
+    project = context.document.get("project") if isinstance(context.document.get("project"), Mapping) else {}
+    project_name = project.get("name") if isinstance(project, Mapping) and isinstance(project.get("name"), str) else root.name or "host-app"
     settings: dict[str, Any] = {
         "entry-point": _prompt_entry_point(root, ask, show),
         "source-paths": _prompt_source_paths(root, ask, show),
-        "build-type": _prompt_choice(ask, show, "Build type", "release", BUILD_TYPES),
+        "build-type": _prompt_choice(ask, show, "Build type", "debug", BUILD_TYPES),
         "bundle": _prompt_choice(ask, show, "Bundle mode", "onefile", BUNDLE_MODES),
         "collect-packages": [],
         "hidden-imports": [],
         "data-files": [],
+        "company-name": "",
+        "author": "",
+        "product-name": project_name,
     }
     icon = _prompt_optional_file("Icon path", _discover_icons(root), context)
     if icon:
@@ -206,18 +212,11 @@ def _prompt_settings(
         "data-files": lambda: _prompt_data_files(
             context.root, context.ask, context.show, settings.get("data-files", [])
         ),
-        "version": lambda: _prompt_configured_version(settings, context),
         "executable-name": lambda: _prompt_name(
             context.ask, context.show, "executable-name", settings.get("executable-name", "")
         ),
-        "internal-name": lambda: _prompt_name(
-            context.ask, context.show, "internal-name", settings.get("internal-name", "")
-        ),
         "product-name": lambda: _prompt_nonempty_text(
             context.ask, context.show, "product-name", settings.get("product-name", "")
-        ),
-        "file-description": lambda: _prompt_nonempty_text(
-            context.ask, context.show, "file-description", settings.get("file-description", "")
         ),
         "company-name": lambda: _prompt_optional_text(settings, "company-name", context),
         "author": lambda: _prompt_optional_text(settings, "author", context),
@@ -260,25 +259,21 @@ def _prompt_optional_text(
 
 
 def _ensure_version(
-    settings: dict[str, Any],
-    document: Mapping[str, Any],
-    ask: Callable[[str], str],
+    _settings: dict[str, Any],
+    document: MutableMapping[str, Any],
     show: Callable[[str], None],
 ) -> None:
     project = document.get("project")
-    project_version = project.get("version") if isinstance(project, Mapping) else None
-    configured_version = settings.get("version")
-    if (isinstance(configured_version, str) and configured_version.strip()) or (
-        isinstance(project_version, str) and project_version.strip()
-    ):
+    if not isinstance(project, MutableMapping):
+        project = tomlkit.table()
+        document["project"] = project
+    project_version = project.get("version")
+    if isinstance(project_version, str) and project_version.strip():
         return
-    show("[project].version is absent or dynamic; an explicit pyinstaller_builder version is needed.")
-    while True:
-        value = ask("[tool.pyinstaller_builder].version: ").strip()
-        if is_valid_version(value):
-            settings["version"] = value
-            return
-        show("Enter a numeric version such as 1.2.3.")
+    show("[project].version is absent or dynamic; using the default version 0.1.0.")
+    project["version"] = "0.1.0"
+    if not isinstance(project.get("description"), str):
+        project["description"] = ""
 
 
 def _prompt_entry_point(
@@ -309,7 +304,7 @@ def _prompt_entry_point(
 def _prompt_source_paths(
     root: Path, ask: Callable[[str], str], show: Callable[[str], None]
 ) -> list[str]:
-    defaults = ["src"] if (root / "src").is_dir() else []
+    defaults: list[str] = []
     rendered = ", ".join(defaults)
     while True:
         answer = ask(f"Source directories, comma-separated [{rendered}]: ").strip()
@@ -629,6 +624,27 @@ def _validate_preview(
     BuildConfig.from_document(preview, root)
 
 
+def _migrate_legacy_project_metadata(
+    document: MutableMapping[str, Any],
+    settings: Mapping[str, Any],
+) -> dict[str, Any]:
+    project = document.get("project")
+    if not isinstance(project, MutableMapping):
+        project = tomlkit.table()
+        document["project"] = project
+    normalized = dict(settings)
+    legacy_version = normalized.pop("version", None)
+    project_version = project.get("version") if isinstance(project.get("version"), str) else None
+    if isinstance(legacy_version, str) and legacy_version.strip() and not project_version:
+        project["version"] = legacy_version.strip()
+    legacy_description = normalized.pop("file-description", None)
+    project_description = project.get("description") if isinstance(project.get("description"), str) else None
+    if isinstance(legacy_description, str) and legacy_description.strip() and not project_description:
+        project["description"] = legacy_description.strip()
+    normalized.pop("internal-name", None)
+    return normalized
+
+
 def _write_settings(document: MutableMapping[str, Any], settings: Mapping[str, Any]) -> None:
     tool = document.get("tool")
     if tool is None:
@@ -642,7 +658,7 @@ def _write_settings(document: MutableMapping[str, Any], settings: Mapping[str, A
         tool[CONFIG_TABLE] = config_table
     if not isinstance(config_table, MutableMapping):
         raise ConfigurationError("[tool] must be a TOML table")
-    for key, value in settings.items():
+    for key, value in _migrate_legacy_project_metadata(document, settings).items():
         if key == "data-files":
             if not isinstance(value, list) or any(
                 not isinstance(entry, Mapping) for entry in value
@@ -665,7 +681,10 @@ def _write_settings(document: MutableMapping[str, Any], settings: Mapping[str, A
 def _atomic_write(path: Path, content: str) -> None:
     temporary_path: Path | None = None
     try:
-        mode = stat.S_IMODE(path.stat().st_mode)
+        try:
+            mode = stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError:
+            mode = 0o666
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",

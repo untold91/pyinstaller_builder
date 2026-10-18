@@ -9,7 +9,6 @@ import tomlkit
 
 from pyinstaller_builder.config import BuildConfig
 from pyinstaller_builder.exceptions import (
-    ConfigurationError,
     InitializationCancelled,
     PyInstallerBuilderError,
 )
@@ -46,7 +45,7 @@ def test_init_preserves_existing_toml_and_adds_configuration(tmp_path: Path) -> 
     assert "[tool.other]" in result
     parsed = tomlkit.parse(result)
     assert parsed["tool"]["pyinstaller_builder"]["entry-point"] == "src/main.py"
-    assert parsed["tool"]["pyinstaller_builder"]["source-paths"] == ["src"]
+    assert parsed["tool"]["pyinstaller_builder"]["source-paths"] == []
     assert parsed["tool"]["pyinstaller_builder"]["initialized"] is True
 
 
@@ -108,22 +107,25 @@ def test_existing_config_replacement_requires_final_confirmation(project: Path) 
     assert changed
     result = tomlkit.parse(path.read_text(encoding="utf-8"))["tool"]["pyinstaller_builder"]
     assert result["initialized"] is True
-    assert result["build-type"] == "release"
+    assert result["build-type"] == "debug"
     assert result["hidden-imports"] == []
-    assert "company-name" not in result
+    assert result["company-name"] == ""
+    assert result["product-name"] == "example-app"
 
 
-def test_existing_config_can_update_version_without_touching_other_keys(project: Path) -> None:
-    """Update the configured version while preserving other setting values."""
+def test_existing_config_can_update_product_name_without_touching_other_keys(project: Path) -> None:
+    """Update a supported tool setting while preserving the rest of the configuration."""
     path = project / "pyproject.toml"
     changed = initialize(
         project,
-        input_fn=_answering(["u", "version", "2.0.0", "y"]),
+        input_fn=_answering(["u", "product-name", "renamed-app", "y"]),
         output_fn=lambda _message: None,
     )
     assert changed
     result = tomlkit.parse(path.read_text(encoding="utf-8"))["tool"]["pyinstaller_builder"]
-    assert result["version"] == "2.0.0"
+    assert result["product-name"] == "renamed-app"
+    assert "version" not in result
+    assert "file-description" not in result
     assert result["entry-point"] == "src/example app/main.py"
     assert result["bundle"] == "onefile"
 
@@ -232,10 +234,23 @@ def test_eof_is_friendly_cancellation(project: Path) -> None:
         initialize(project, input_fn=eof)
 
 
-def test_init_requires_existing_pyproject(tmp_path: Path) -> None:
-    """Require an existing host pyproject file before initialization."""
-    with pytest.raises(ConfigurationError, match="Initialize the Python project first"):
-        initialize(tmp_path)
+def test_init_creates_missing_pyproject_file(tmp_path: Path) -> None:
+    """Create a minimal host pyproject.toml when the project has no TOML yet."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+
+    assert initialize(
+        tmp_path,
+        input_fn=_answering(["", "", "", "", "", "y"]),
+        output_fn=lambda _message: None,
+    )
+    parsed = tomlkit.parse((tmp_path / "pyproject.toml").read_text(encoding="utf-8"))
+    tool_settings = parsed["tool"]["pyinstaller_builder"]
+    assert parsed["project"]["name"] == tmp_path.name
+    assert parsed["project"]["version"] == "0.1.0"
+    assert "version" not in tool_settings
+    assert "file-description" not in tool_settings
+    assert tool_settings["initialized"] is True
 
 
 def test_failed_atomic_replace_leaves_original_intact(

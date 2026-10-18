@@ -81,10 +81,21 @@ console command use the same spelling.
 
 ### 6. Initialize the host project
 
-From the host project root:
+If the host project already has a `pyproject.toml`, run initialization from the
+project root or pass the directory explicitly:
 
 ```bash
 pyinstaller_builder init --project-dir .
+```
+
+If the project does not yet have a `pyproject.toml`, `pyinstaller_builder init`
+works from that directory as well. It creates a minimal project file with the
+folder name and version `0.1.0`, then validates and writes the required
+`[tool.pyinstaller_builder]` configuration. You can also point at an arbitrary
+host root explicitly:
+
+```bash
+pyinstaller_builder init --project-dir "C:/work/host app"
 ```
 
 The initializer discovers likely entry points, source directories, icons, and
@@ -99,6 +110,9 @@ same confirmed setup flow; a successful save resumes that build once. Answer
 **N** to cancel without modifying the file or building. Cancellation and
 failures also stop the build. Non-interactive use never waits for input; run
 `init` before building in CI.
+
+When initialization is declined or fails, the existing `pyproject.toml` remains
+unchanged, and the build exits without running PyInstaller.
 
 ### 7. Review the host TOML
 
@@ -129,12 +143,36 @@ directories. `build-type` defaults to `"release"` and accepts `"release"` or
 `data-files` table requires an existing file or directory as `source`; its
 relative bundle `target` defaults to `"."`.
 
-The build version defaults to the host's `[project].version`. Use the optional
-`version` setting only for an intentional override. If the host version is
-absent or dynamic, set an explicit version during initialization. Optional
-metadata fields are `executable-name`, `internal-name`, `company-name`,
-`author`, `product-name`, and `file-description`. The default executable name
-is `<internal-name>_v<version>_<interpreter-architecture>`.
+The host project's `[project].version` is the source of truth for the build
+version. If the host version is absent or dynamic, initialization fills it with
+`0.1.0` and keeps the tool config free of duplicate version values. The
+package derives `internal-name` from `[project].name` and `file-description`
+from `[project].description` at runtime. Optional tool settings are
+`executable-name`, `company-name`, `author`, and `product-name`; the default
+executable name is `<internal-name>_v<version>_<interpreter-architecture>`.
+
+If an older configuration still contains `version` or `file-description` under
+`[tool.pyinstaller_builder]`, the loader treats those as migration fallbacks
+only when the matching `[project]` field is absent. It prefers valid
+`[project]` metadata and writes no duplicate metadata keys back into the tool
+section.
+
+A minimal project created by `pyinstaller_builder init` looks like this:
+
+```text
+my-host-app/
+├── pyproject.toml
+├── src/
+│   └── my_host_app/
+│       └── __main__.py
+├── build/
+├── dist/
+└── assets/
+```
+
+`pyinstaller_builder` writes the config into the host app's `pyproject.toml`
+and keeps unrelated TOML sections intact. Any existing `[project]` metadata is
+preserved while the tool-specific settings are added or updated.
 
 ### 8. Build the application
 

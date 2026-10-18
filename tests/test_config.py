@@ -46,7 +46,7 @@ entry-point = "src/example app/main.py"
 """.lstrip(),
     )
     config = BuildConfig.load(project)
-    assert config.build_type == "release"
+    assert config.build_type == "debug"
     assert config.bundle == "onefile"
     assert config.icon is None
     assert not config.source_paths
@@ -82,8 +82,8 @@ def test_invalid_settings_report_key(project: Path, settings: str, message: str)
         BuildConfig.load(project)
 
 
-def test_dynamic_project_version_requires_explicit_override(project: Path) -> None:
-    """Require an explicit build version when the project version is dynamic."""
+def test_dynamic_project_version_defaults_to_0_1_0(project: Path) -> None:
+    """Use the approved default version when the project version is dynamic or absent."""
     _write_config(
         project,
         """
@@ -95,8 +95,7 @@ initialized = true
 entry-point = "src/example app/main.py"
 """.lstrip(),
     )
-    with pytest.raises(ConfigurationError, match=r"version is dynamic"):
-        BuildConfig.load(project)
+    assert BuildConfig.load(project).version == "0.1.0"
 
     with (project / "pyproject.toml").open("a", encoding="utf-8") as stream:
         stream.write('version = "3.0.0"\n')
